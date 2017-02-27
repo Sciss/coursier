@@ -20,9 +20,17 @@ downloadInstallSbtExtras() {
   chmod +x bin/sbt
 }
 
+setupCsbtLauncher() {
+  sbt ++2.12.1 coreJVM/publishLocal cache/publishLocal sbt-launcher/publishLocal
+  scripts/generate-sbt-launcher.sh
+  rm -rf project
+  rm -rf ~/.sbt ~/.ivy2/cache
+  mv csbt bin/
+}
+
 integrationTestsRequirements() {
   # Required for ~/.ivy2/local repo tests
-  sbt ++2.11.8 coreJVM/publishLocal http-server/publishLocal
+  csbt ++2.11.8 coreJVM/publishLocal http-server/publishLocal
 
   # Required for HTTP authentication tests
   coursier launch \
@@ -63,39 +71,39 @@ is211() {
 }
 
 runSbtCoursierTests() {
-  sbt ++$SCALA_VERSION coreJVM/publishLocal cache/publishLocal sbt-coursier/scripted
+  csbt ++$SCALA_VERSION coreJVM/publishLocal cache/publishLocal sbt-coursier/scripted
 }
 
 runSbtShadingTests() {
-  sbt ++$SCALA_VERSION sbt-coursier/publishLocal sbt-shading/scripted
+  csbt ++$SCALA_VERSION sbt-coursier/publishLocal sbt-shading/scripted
 }
 
 jsCompile() {
-  sbt ++$SCALA_VERSION js/compile js/test:compile coreJS/fastOptJS fetch-js/fastOptJS testsJS/test:fastOptJS js/test:fastOptJS
+  csbt ++$SCALA_VERSION js/compile js/test:compile coreJS/fastOptJS fetch-js/fastOptJS testsJS/test:fastOptJS js/test:fastOptJS
 }
 
 jvmCompile() {
-  sbt ++$SCALA_VERSION jvm/compile jvm/test:compile
+  csbt ++$SCALA_VERSION jvm/compile jvm/test:compile
 }
 
 runJsTests() {
-  sbt ++$SCALA_VERSION js/test
+  csbt ++$SCALA_VERSION js/test
 }
 
 runJvmTests() {
-  sbt ++$SCALA_VERSION jvm/test jvm/it:test
+  csbt ++$SCALA_VERSION jvm/test jvm/it:test
 }
 
 validateReadme() {
-  sbt ++${SCALA_VERSION} tut
+  csbt ++${SCALA_VERSION} tut
 }
 
 checkBinaryCompatibility() {
-  sbt ++${SCALA_VERSION} coreJVM/mimaReportBinaryIssues cache/mimaReportBinaryIssues
+  csbt ++${SCALA_VERSION} coreJVM/mimaReportBinaryIssues cache/mimaReportBinaryIssues
 }
 
 testLauncherJava6() {
-  sbt ++${SCALA_VERSION} cli/pack
+  csbt ++${SCALA_VERSION} cli/pack
   docker run -it --rm \
     -v $(pwd)/cli/target/pack:/opt/coursier \
     -e CI=true \
@@ -110,7 +118,7 @@ testLauncherJava6() {
 }
 
 testSbtCoursierJava6() {
-  sbt ++${SCALA_VERSION} publishLocal
+  csbt ++${SCALA_VERSION} publishLocal
   git clone https://github.com/alexarchambault/scalacheck-shapeless.git
   cd scalacheck-shapeless
   cd project
@@ -137,7 +145,7 @@ addSbtPlugin("io.get-coursier" % "sbt-coursier" % "1.0.0-SNAPSHOT")
 }
 
 publish() {
-  sbt ++${SCALA_VERSION} publish
+  csbt ++${SCALA_VERSION} publish
 }
 
 
@@ -147,6 +155,8 @@ setupCustomJarjar
 
 setupCoursierBinDir
 downloadInstallSbtExtras
+
+setupCsbtLauncher
 
 if isScalaJs; then
   jsCompile
