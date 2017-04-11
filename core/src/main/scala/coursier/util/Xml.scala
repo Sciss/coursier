@@ -50,11 +50,15 @@ object Xml {
       else None
   }
 
-  def text(elem: Node, label: String, description: String): Option[String] = {
+  def textOpt(elem: Node, label: String, description: String): Option[String] = {
     elem.children
       .find(_.label == label)
       .flatMap(_.children.collectFirst{case Text(t) => t})
   }
+
+  def text(elem: Node, label: String, description: String): Either[String, String] =
+    textOpt(elem, label = label, description = description)
+      .fold[Either[String, String]](Left(s"$description not found"))(Right(_))
 
   def parseDateTime(s: String): Option[Versions.DateTime] =
     if (s.length == 14 && s.forall(_.isDigit))

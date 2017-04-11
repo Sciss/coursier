@@ -367,7 +367,7 @@ object Resolution {
     // vague attempt at recovering the POM packaging tag
     def packagingOpt = project.publications.collectFirst {
       case ("compile", pub) =>
-        pub.`type`
+        pub.tpe
     }
 
     // FIXME The extra properties should only be added for Maven projects, not Ivy ones

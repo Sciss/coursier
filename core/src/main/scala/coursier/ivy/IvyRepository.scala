@@ -4,7 +4,7 @@ import coursier.Fetch
 import coursier.core._
 import coursier.util.WebPage
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
 
 final case class IvyRepository(
@@ -68,7 +68,7 @@ final case class IvyRepository(
           overrideClassifiers: Option[Seq[String]]
         ): Seq[Artifact] = {
 
-          val retained =
+          val retained: Seq[Publication] =
             overrideClassifiers match {
               case None =>
                 project.publications.collect {
@@ -87,14 +87,16 @@ final case class IvyRepository(
             }
 
           val retainedWithUrl = retained.flatMap { p =>
-            pattern.substituteVariables(variables(
+            val e = pattern.substituteVariables(variables(
               dependency.module,
               Some(project.actualVersion),
-              p.`type`,
+              p.tpe,
               p.name,
               p.ext,
               Some(p.classifier).filter(_.nonEmpty)
-            )).toList.map(p -> _) // FIXME Validation errors are ignored
+            ))
+//            e.toList.map(p -> _) // FIXME Validation errors are ignored
+            e.fold[List[(Publication, String)]](_ => Nil, s => List(p -> s))
           }
 
           retainedWithUrl.map { case (p, url) =>
@@ -119,14 +121,14 @@ final case class IvyRepository(
     else
       Artifact.Source.empty
 
+  type FindContent = Either[String, (Artifact.Source, Project)]
+  type FindResult  = Future[FindContent]
 
-  def find[F[_]](
+  def find(
     module: Module,
     version: String,
-    fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): Future[Either[String, (Artifact.Source, Project)]] = {
+    fetch: Fetch.Content
+  )(implicit exec: ExecutionContext): FindResult = {
 
     revisionListingPatternOpt match {
       case None =>
@@ -138,18 +140,18 @@ final case class IvyRepository(
           case None =>
             findNoInverval(module, version, fetch)
           case Some(itv) =>
-            val listingUrl = revisionListingPattern.substituteVariables(
+            val listingUrl: Either[String, String] = revisionListingPattern.substituteVariables(
               variables(module, None, "ivy", "ivy", "xml", None)
-            ).flatMap { s =>
+            ).right.flatMap { s =>
               if (s.endsWith("/"))
                 Right(s)
               else
                 Left(s"Don't know how to list revisions of ${metadataPattern.string}")
             }
 
-            def fromWebPage(url: String, s: String) = {
-              val subDirs = WebPage.listDirectories(url, s)
-              val versions = subDirs.map(Parse.version).collect { case Some(v) => v }
+            def fromWebPage(url: String, s: String): FindResult = {
+              val subDirs       = WebPage.listDirectories(url, s)
+              val versions      = subDirs.map(Parse.version).collect { case Some(v) => v }
               val versionsInItv = versions.filter(itv.contains)
 
               if (versionsInItv.isEmpty)
@@ -160,7 +162,7 @@ final case class IvyRepository(
               }
             }
 
-            def artifactFor(url: String) =
+            def artifactFor(url: String): Artifact =
               Artifact(
                 url,
                 Map.empty,
@@ -170,26 +172,38 @@ final case class IvyRepository(
                 authentication
               )
 
-            for {
-              url <- EitherT(F.point(listingUrl))
-              s <- fetch(artifactFor(url))
-              res <- fromWebPage(url, s)
-            } yield res
+            val res: FindResult =
+              listingUrl.fold[FindResult](err => Future.successful(Left(err)), { url =>
+                fetch(artifactFor(url)).flatMap { e =>
+                  e.fold[FindResult](err => Future.successful(Left(err)), { s =>
+                    fromWebPage(url, s)
+                  })
+                }
+              })
+
+            res
+
+//            for {
+//              url  <- listingUrl.right // Future.successful(listingUrl)
+//              sFut <- fetch(artifactFor(url))
+//              s    <- sFut.right
+////              res  <- fromWebPage(url, s)
+//            } yield fromWebPage(url, s)
         }
     }
   }
 
-  def findNoInverval[F[_]](
+  def findNoInverval(
     module: Module,
     version: String,
-    fetch: Fetch.Content[F]
-  ): Future[Either[String, (Artifact.Source, Project)]] = {
+    fetch: Fetch.Content
+  ): FindResult = {
 
     val eitherArtifact: Either[String, Artifact] =
       for {
         url <- metadataPattern.substituteVariables(
           variables(module, Some(version), "ivy", "ivy", "xml", None)
-        )
+        ).right
       } yield {
         var artifact = Artifact(
           url,
@@ -209,15 +223,17 @@ final case class IvyRepository(
       }
 
     for {
-      artifact <- EitherT(F.point(eitherArtifact))
-      ivy <- fetch(artifact)
-      proj0 <- EitherT(F.point {
+      artifact <- eitherArtifact.right // EitherT(F.point(eitherArtifact))
+      ivyFut   <- fetch(artifact)
+      ivy      <- ivyFut.right
+      proj0    <- ( /* EitherT(F.point { */
         for {
-          xml <- \/.fromEither(compatibility.xmlParse(ivy))
-          _ <- if (xml.label == "ivy-module") Right(()) else Left("Module definition not found")
-          proj <- IvyXml.project(xml)
+          xml <- compatibility.xmlParse(ivy).right
+          _ <- (if (xml.label == "ivy-module") Right(()) else Left("Module definition not found")).right
+          proj <- IvyXml.project(xml).right
         } yield proj
-      })
+      /* }) */
+      ) . right
     } yield {
       val proj =
         if (dropInfoAttributes)
@@ -253,16 +269,16 @@ final case class IvyRepository(
 
 object IvyRepository {
   def parse(
-    pattern: String,
-    metadataPatternOpt: Option[String] = None,
-    changing: Option[Boolean] = None,
-    properties: Map[String, String] = Map.empty,
-    withChecksums: Boolean = true,
-    withSignatures: Boolean = true,
-    withArtifacts: Boolean = true,
+    pattern           : String,
+    metadataPatternOpt: Option[String]          = None,
+    changing          : Option[Boolean]         = None,
+    properties        : Map[String, String]     = Map.empty,
+    withChecksums     : Boolean                 = true,
+    withSignatures    : Boolean                 = true,
+    withArtifacts     : Boolean                 = true,
     // hack for SBT putting infos in properties
-    dropInfoAttributes: Boolean = false,
-    authentication: Option[Authentication] = None
+    dropInfoAttributes: Boolean                 = false,
+    authentication    : Option[Authentication]  = None
   ): Either[String, IvyRepository] =
 
     for {

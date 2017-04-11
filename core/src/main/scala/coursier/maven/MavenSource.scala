@@ -24,7 +24,7 @@ final case class MavenSource(
       val versioning = project
         .snapshotVersioning
         .flatMap(versioning =>
-          mavenVersioning(versioning, publication.classifier, publication.`type`)
+          mavenVersioning(versioning, publication.classifier, publication.tpe)
         )
 
       val path = dependency.module.organization.split('.').toSeq ++ Seq(
@@ -110,7 +110,7 @@ final case class MavenSource(
         val versioning = project
           .snapshotVersioning
           .flatMap(versioning =>
-            mavenVersioning(versioning, publication.classifier, publication.`type`)
+            mavenVersioning(versioning, publication.classifier, publication.tpe)
           )
 
         val path = dependency.module.organization.split('.').toSeq ++ Seq(
@@ -209,8 +209,8 @@ final case class MavenSource(
         else if (dependency.attributes.`type`.nonEmpty)
           enrichedPublications.collect {
             case p
-              if p.publication.`type` == dependency.attributes.`type` ||
-                (p.publication.ext == dependency.attributes.`type` && project.packagingOpt.toSeq.contains(p.publication.`type`)) // wow
+              if p.publication.tpe == dependency.attributes.`type` ||
+                (p.publication.ext == dependency.attributes.`type` && project.packagingOpt.toSeq.contains(p.publication.tpe)) // wow
             =>
               p.artifact
           }

@@ -25,31 +25,35 @@ object Pom {
     for {
       organization <- {
         val e = text(node, "groupId", "Organization")
-        if (groupIdIsOptional) e.orElse(Some(""))
+        if (groupIdIsOptional) e.left.flatMap(_ => Right(""))
         else e
-      }
-      name <- text(node, "artifactId", "Name")
+      } .right
+      name <- text(node, "artifactId", "Name").right
     } yield Module(organization, name, Map.empty).trim
   }
 
-  private def readVersion(node: Node) =
-    text(node, "version", "Version").getOrElse("").trim
+  private def readVersion(node: Node): String =
+    textOpt(node, "version", "Version").getOrElse("").trim
+
+  private implicit final class TraverseU[A](private val seq: Seq[A]) extends AnyVal {
+    def traverseU[B, C](fun: A => Either[B, C]): Either[B, Seq[C]] = ???
+  }
 
   def dependency(node: Node): Either[String, (String, Dependency)] = {
     for {
       mod <- module(node)
-      version0 = readVersion(node)
-      scopeOpt = text(node, "scope", "")
-      typeOpt = text(node, "type", "")
-      classifierOpt = text(node, "classifier", "")
-      xmlExclusions = node.children
+      version0      = readVersion(node)
+      scopeOpt      = textOpt(node, "scope"      , "")
+      typeOpt       = textOpt(node, "type"       , "")
+      classifierOpt = textOpt(node, "classifier" , "")
+      xmlExclusions: Seq[Node] = node.children
         .find(_.label == "exclusions")
         .map(_.children.filter(_.label == "exclusion"))
         .getOrElse(Seq.empty)
-      exclusions <- {
-        xmlExclusions.toList.traverseU(module(_))
+      exclusions: Seq[Module] <- {
+        xmlExclusions.toList.traverseU[String, Module](module(_)).right
       }
-      optional = text(node, "optional", "").toSeq.contains("true")
+      optional = textOpt(node, "optional", "").toSeq.contains("true")
     } yield scopeOpt.getOrElse("") -> Dependency(
         mod,
         version0,
@@ -63,7 +67,7 @@ object Pom {
 
   private def profileActivation(node: Node): (Option[Boolean], Activation) = {
     val byDefault =
-      text(node, "activeByDefault", "").flatMap{
+      textOpt(node, "activeByDefault", "").flatMap{
         case "true" => Some(true)
         case "false" => Some(false)
         case _ => None
@@ -73,21 +77,21 @@ object Pom {
       .filter(_.label == "property")
       .flatMap{ p =>
         for{
-          name <- text(p, "name", "")
-          valueOpt = text(p, "value", "")
+          name <- textOpt(p, "name", "")
+          valueOpt = textOpt(p, "value", "")
         } yield (name, valueOpt)
       }
 
     val osNodeOpt = node.children.collectFirst { case n if n.label == "os" => n }
 
     val os = Activation.Os(
-      osNodeOpt.flatMap(n => text(n, "arch", "")),
-      osNodeOpt.flatMap(n => text(n, "family", "")).toSet,
-      osNodeOpt.flatMap(n => text(n, "name", "")),
-      osNodeOpt.flatMap(n => text(n, "version", ""))
+      osNodeOpt.flatMap(n => textOpt(n, "arch", "")),
+      osNodeOpt.flatMap(n => textOpt(n, "family", "")).toSet,
+      osNodeOpt.flatMap(n => textOpt(n, "name", "")),
+      osNodeOpt.flatMap(n => textOpt(n, "version", ""))
     )
 
-    val jdk = text(node, "jdk", "").flatMap { s =>
+    val jdk = textOpt(node, "jdk", "").flatMap { s =>
       Parse.versionInterval(s).map(Left(_))
         .orElse(Parse.version(s).map(v => Right(Seq(v))))
     }
@@ -98,41 +102,43 @@ object Pom {
   }
 
   def profile(node: Node): Either[String, Profile] = {
-    val id = text(node, "id", "Profile ID").getOrElse("")
+    val id = textOpt(node, "id", "Profile ID").getOrElse("")
 
-    val xmlActivationOpt = node.children
+    val xmlActivationOpt: Option[Node] = node.children
       .find(_.label == "activation")
+
     val (activeByDefault, activation) = xmlActivationOpt.fold((Option.empty[Boolean], Activation.empty))(profileActivation)
 
-    val xmlDeps = node.children
+    val xmlDeps: Seq[Node] = node.children
       .find(_.label == "dependencies")
       .map(_.children.filter(_.label == "dependency"))
       .getOrElse(Seq.empty)
 
     for {
-      deps <- xmlDeps.toList.traverseU(dependency)
+      deps <- xmlDeps.toList.traverseU[String, (String, Dependency)](dependency) .right
 
-      xmlDepMgmts = node.children
+      xmlDepMgmts: Seq[Node] = node.children
         .find(_.label == "dependencyManagement")
         .flatMap(_.children.find(_.label == "dependencies"))
         .map(_.children.filter(_.label == "dependency"))
         .getOrElse(Seq.empty)
-      depMgmts <- xmlDepMgmts.toList.traverseU(dependency)
 
-      xmlProperties = node.children
+      depMgmts <- xmlDepMgmts.toList.traverseU[String, (String, Dependency)](dependency) .right
+
+      xmlProperties: Seq[Node] = node.children
         .find(_.label == "properties")
         .map(_.children.collect{case elem if elem.isElement => elem})
         .getOrElse(Seq.empty)
 
       properties <- {
-        xmlProperties.toList.traverseU(property)
-      }
+        xmlProperties.toList.traverseU[String, (String, String)](property)
+      } .right
 
     } yield Profile(id, activeByDefault, activation, deps, depMgmts, properties.toMap)
   }
 
   def packagingOpt(pom: Node): Option[String] =
-    text(pom, "packaging", "")
+    textOpt(pom, "packaging", "")
 
   def project(pom: Node): Either[String, Project] = {
     for {
@@ -213,8 +219,8 @@ object Pom {
         .flatMap(_.children)
         .filter(_.label == "license")
         .flatMap { n =>
-          text(n, "name", "License name").map { name =>
-            (name, text(n, "url", "License URL"))
+          textOpt(n, "name", "License name").map { name =>
+            (name, textOpt(n, "url", "License URL"))
           }.toSeq
         }
 
@@ -225,9 +231,9 @@ object Pom {
         .filter(_.label == "developer")
         .map { n =>
           for {
-            id <- text(n, "id", "Developer ID")
-            name <- text(n, "name", "Developer name")
-            url <- text(n, "url", "Developer URL")
+            id <- textOpt(n, "id", "Developer ID")
+            name <- textOpt(n, "name", "Developer name")
+            url <- textOpt(n, "url", "Developer URL")
           } yield Info.Developer(id, name, url)
         }
         .collect {
@@ -267,23 +273,23 @@ object Pom {
 
   def versions(node: Node): Either[String, Versions] = {
     for {
-      organization <- text(node, "groupId", "Organization") // Ignored
-      name <- text(node, "artifactId", "Name") // Ignored
+      organization <- textOpt(node, "groupId", "Organization") // Ignored
+      name <- textOpt(node, "artifactId", "Name") // Ignored
 
       xmlVersioning <- node.children
         .find(_.label == "versioning")
         .toRightDisjunction("Versioning info not found in metadata")
 
-      latest = text(xmlVersioning, "latest", "Latest version")
+      latest = textOpt(xmlVersioning, "latest", "Latest version")
         .getOrElse("")
-      release = text(xmlVersioning, "release", "Release version")
+      release = textOpt(xmlVersioning, "release", "Release version")
         .getOrElse("")
 
       versionsOpt = xmlVersioning.children
         .find(_.label == "versions")
         .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
 
-      lastUpdatedOpt = text(xmlVersioning, "lastUpdated", "Last update date and time")
+      lastUpdatedOpt = textOpt(xmlVersioning, "lastUpdated", "Last update date and time")
         .flatMap(parseDateTime)
 
     } yield Versions(latest, release, versionsOpt.map(_.toList).getOrElse(Nil), lastUpdatedOpt)
@@ -291,14 +297,14 @@ object Pom {
 
   def snapshotVersion(node: Node): Either[String, SnapshotVersion] = {
     def textOrEmpty(name: String, desc: String) =
-      text(node, name, desc)
+      textOpt(node, name, desc)
         .getOrElse("")
 
     val classifier = textOrEmpty("classifier", "Classifier")
     val ext = textOrEmpty("extension", "Extensions")
     val value = textOrEmpty("value", "Value")
 
-    val updatedOpt = text(node, "updated", "Updated")
+    val updatedOpt = textOpt(node, "updated", "Updated")
       .flatMap(parseDateTime)
 
     Right(SnapshotVersion(
@@ -312,24 +318,24 @@ object Pom {
   def snapshotVersioning(node: Node): Either[String, SnapshotVersioning] = {
     // FIXME Quite similar to Versions above
     for {
-      organization <- text(node, "groupId", "Organization")
-      name <- text(node, "artifactId", "Name")
+      organization <- textOpt(node, "groupId", "Organization")
+      name <- textOpt(node, "artifactId", "Name")
       version = readVersion(node)
 
       xmlVersioning <- node.children
         .find(_.label == "versioning")
         .toRightDisjunction("Versioning info not found in metadata")
 
-      latest = text(xmlVersioning, "latest", "Latest version")
+      latest = textOpt(xmlVersioning, "latest", "Latest version")
         .getOrElse("")
-      release = text(xmlVersioning, "release", "Release version")
+      release = textOpt(xmlVersioning, "release", "Release version")
         .getOrElse("")
 
       versionsOpt = xmlVersioning.children
         .find(_.label == "versions")
         .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
 
-      lastUpdatedOpt = text(xmlVersioning, "lastUpdated", "Last update date and time")
+      lastUpdatedOpt = textOpt(xmlVersioning, "lastUpdated", "Last update date and time")
         .flatMap(parseDateTime)
 
       xmlSnapshotOpt = xmlVersioning.children
@@ -337,20 +343,20 @@ object Pom {
 
       timestamp = xmlSnapshotOpt
         .flatMap(
-          text(_, "timestamp", "Snapshot timestamp")
+          textOpt(_, "timestamp", "Snapshot timestamp")
         )
         .getOrElse("")
 
       buildNumber = xmlSnapshotOpt
         .flatMap(
-          text(_, "buildNumber", "Snapshot build number")
+          textOpt(_, "buildNumber", "Snapshot build number")
         )
         .filter(s => s.nonEmpty && s.forall(_.isDigit))
         .map(_.toInt)
 
       localCopy = xmlSnapshotOpt
         .flatMap(
-          text(_, "localCopy", "Snapshot local copy")
+          textOpt(_, "localCopy", "Snapshot local copy")
         )
         .collect{
           case "true" => true

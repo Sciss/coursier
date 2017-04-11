@@ -181,12 +181,12 @@ final case class SnapshotVersioning(
 
 // Ivy-specific
 final case class Publication(
-  name: String,
-  `type`: String,
-  ext: String,
-  classifier: String
+                              name: String,
+                              tpe: String,
+                              ext: String,
+                              classifier: String
 ) {
-  def attributes: Attributes = Attributes(`type`, classifier)
+  def attributes: Attributes = Attributes(tpe, classifier)
 }
 
 final case class Artifact(

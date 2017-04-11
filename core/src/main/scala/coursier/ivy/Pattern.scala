@@ -3,8 +3,6 @@ package coursier.ivy
 import fastparse.all._
 
 import scala.language.{implicitConversions, reflectiveCalls}
-import scalaz.Scalaz._
-import scalaz._
 
 final case class PropertiesPattern(chunks: Seq[PropertiesPattern.ChunkOrProperty]) {
 
@@ -12,7 +10,7 @@ final case class PropertiesPattern(chunks: Seq[PropertiesPattern.ChunkOrProperty
 
   import PropertiesPattern.ChunkOrProperty
 
-  def substituteProperties(properties: Map[String, String]): String \/ Pattern = {
+  def substituteProperties(properties: Map[String, String]): Either[String, Pattern] = {
 
     val validation = chunks.toVector.traverseM[({ type L[X] = ValidationNel[String, X] })#L, Pattern.Chunk] {
       case ChunkOrProperty.Prop(name, alternativesOpt) =>
@@ -62,7 +60,7 @@ final case class Pattern(chunks: Seq[Pattern.Chunk]) {
 
   def string: String = chunks.map(_.string).mkString
 
-  def substituteVariables(variables: Map[String, String]): String \/ String = {
+  def substituteVariables(variables: Map[String, String]): Either[String, String] = {
 
     def helper(chunks: Seq[Chunk]): ValidationNel[String, Seq[Chunk.Const]] =
       chunks.toVector.traverseU[ValidationNel[String, Seq[Chunk.Const]]] {
@@ -144,12 +142,12 @@ object PropertiesPattern {
   def parser: Parser[Seq[ChunkOrProperty]] = Parser.chunks
 
 
-  def parse(pattern: String): String \/ PropertiesPattern =
+  def parse(pattern: String): Either[String, PropertiesPattern] =
     parser.parse(pattern) match {
       case f: Parsed.Failure =>
-        f.msg.left
+        Left(f.msg)
       case Parsed.Success(v, _) =>
-        PropertiesPattern(v).right
+        Right(PropertiesPattern(v))
     }
 
 }

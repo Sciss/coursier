@@ -6,7 +6,6 @@ import coursier.core.compatibility.encodeURIComponent
 import coursier.util.WebPage
 
 import scala.language.higherKinds
-import scalaz._
 
 object MavenRepository {
 
