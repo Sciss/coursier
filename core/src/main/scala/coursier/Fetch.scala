@@ -1,8 +1,7 @@
 package coursier
 
+import scala.concurrent.Future
 import scala.language.higherKinds
-
-import scalaz._
 
 object Fetch {
 
@@ -11,10 +10,10 @@ object Fetch {
 
   type MD = Seq[(
     (Module, String),
-    Seq[String] \/ (Artifact.Source, Project)
+    Either[Seq[String], (Artifact.Source, Project)]
   )]
 
-  type Metadata[F[_]] = Seq[(Module, String)] => F[MD]
+  type Metadata = Seq[(Module, String)] => Future[MD]
 
   /**
     * Try to find `module` among `repositories`.
@@ -34,7 +33,7 @@ object Fetch {
     fetch: Content[F]
   )(implicit
     F: Monad[F]
-  ): EitherT[F, Seq[String], (Artifact.Source, Project)] = {
+  ): Future[Either[Seq[String], (Artifact.Source, Project)]] = {
 
     val lookups = repositories
       .map(repo => repo -> repo.find(module, version, fetch).run)
@@ -42,9 +41,9 @@ object Fetch {
     val task = lookups.foldLeft[F[Seq[String] \/ (Artifact.Source, Project)]](F.point(-\/(Nil))) {
       case (acc, (repo, eitherProjTask)) =>
         F.bind(acc) {
-          case -\/(errors) =>
+          case Left(errors) =>
             F.map(eitherProjTask)(_.leftMap(error => error +: errors))
-          case res @ \/-(_) =>
+          case res @ Right(_) =>
             F.point(res)
         }
     }

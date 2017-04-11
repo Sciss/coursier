@@ -95,7 +95,7 @@ lazy val core = project
     scalaXmlIfNecessary,
     libraryDependencies ++= Seq(
       depFastParse,
-      depScalazCore,
+//      depScalazCore,
       depJsoup
     ),
     generatePropertyFile

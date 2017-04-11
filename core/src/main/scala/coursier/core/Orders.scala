@@ -41,9 +41,9 @@ object Orders {
     */
   def configurationPartialOrder(configurations: Map[String, Seq[String]]): PartialOrdering[String] =
     new PartialOrdering[String] {
-      val allParentsMap = allConfigurations(configurations)
+      val allParentsMap: Map[String, Set[String]] = allConfigurations(configurations)
 
-      def tryCompare(x: String, y: String) =
+      def tryCompare(x: String, y: String): Option[Int] =
         if (x == y)
           Some(0)
         else if (allParentsMap.get(x).exists(_(y)))
@@ -76,14 +76,14 @@ object Orders {
    */
   val exclusionsPartialOrder: PartialOrdering[Set[(String, String)]] =
     new PartialOrdering[Set[(String, String)]] {
-      def boolCmp(a: Boolean, b: Boolean) = (a, b) match {
+      def boolCmp(a: Boolean, b: Boolean): Option[Int] = (a, b) match {
         case (true, true) => Some(0)
         case (true, false) => Some(1)
         case (false, true) => Some(-1)
         case (false, false) => None
       }
 
-      def tryCompare(x: Set[(String, String)], y: Set[(String, String)]) = {
+      def tryCompare(x: Set[(String, String)], y: Set[(String, String)]): Option[Int] = {
         val (xAll, xExcludeByOrg1, xExcludeByName1, xRemaining0) = Exclusions.partition(x)
         val (yAll, yExcludeByOrg1, yExcludeByName1, yRemaining0) = Exclusions.partition(y)
 

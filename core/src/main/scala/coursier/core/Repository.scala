@@ -2,20 +2,15 @@ package coursier.core
 
 import coursier.Fetch
 
+import scala.concurrent.Future
 import scala.language.higherKinds
-
-import scalaz._
-
-import coursier.core.compatibility.encodeURIComponent
 
 trait Repository extends Product with Serializable {
   def find[F[_]](
     module: Module,
     version: String,
     fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, (Artifact.Source, Project)]
+  ): Future[Either[String, (Artifact.Source, Project)]]
 }
 
 object Repository {

@@ -4,10 +4,8 @@ import coursier.Fetch
 import coursier.core._
 import coursier.util.WebPage
 
+import scala.concurrent.Future
 import scala.language.higherKinds
-
-import scalaz._
-import scalaz.Scalaz._
 
 final case class IvyRepository(
   pattern: Pattern,
@@ -68,7 +66,7 @@ final case class IvyRepository(
           dependency: Dependency,
           project: Project,
           overrideClassifiers: Option[Seq[String]]
-        ) = {
+        ): Seq[Artifact] = {
 
           val retained =
             overrideClassifiers match {
@@ -128,7 +126,7 @@ final case class IvyRepository(
     fetch: Fetch.Content[F]
   )(implicit
     F: Monad[F]
-  ): EitherT[F, String, (Artifact.Source, Project)] = {
+  ): Future[Either[String, (Artifact.Source, Project)]] = {
 
     revisionListingPatternOpt match {
       case None =>
@@ -144,9 +142,9 @@ final case class IvyRepository(
               variables(module, None, "ivy", "ivy", "xml", None)
             ).flatMap { s =>
               if (s.endsWith("/"))
-                s.right
+                Right(s)
               else
-                s"Don't know how to list revisions of ${metadataPattern.string}".left
+                Left(s"Don't know how to list revisions of ${metadataPattern.string}")
             }
 
             def fromWebPage(url: String, s: String) = {
@@ -155,7 +153,7 @@ final case class IvyRepository(
               val versionsInItv = versions.filter(itv.contains)
 
               if (versionsInItv.isEmpty)
-                EitherT(F.point(s"No version found for $version".left[(Artifact.Source, Project)]))
+                Future.successful[Either[String, (Artifact.Source, Project)]](Left(s"No version found for $version"))
               else {
                 val version0 = versionsInItv.max
                 findNoInverval(module, version0.repr, fetch)
@@ -185,11 +183,9 @@ final case class IvyRepository(
     module: Module,
     version: String,
     fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, (Artifact.Source, Project)] = {
+  ): Future[Either[String, (Artifact.Source, Project)]] = {
 
-    val eitherArtifact: String \/ Artifact =
+    val eitherArtifact: Either[String, Artifact] =
       for {
         url <- metadataPattern.substituteVariables(
           variables(module, Some(version), "ivy", "ivy", "xml", None)
@@ -218,7 +214,7 @@ final case class IvyRepository(
       proj0 <- EitherT(F.point {
         for {
           xml <- \/.fromEither(compatibility.xmlParse(ivy))
-          _ <- if (xml.label == "ivy-module") \/-(()) else -\/("Module definition not found")
+          _ <- if (xml.label == "ivy-module") Right(()) else Left("Module definition not found")
           proj <- IvyXml.project(xml)
         } yield proj
       })
@@ -267,7 +263,7 @@ object IvyRepository {
     // hack for SBT putting infos in properties
     dropInfoAttributes: Boolean = false,
     authentication: Option[Authentication] = None
-  ): String \/ IvyRepository =
+  ): Either[String, IvyRepository] =
 
     for {
       propertiesPattern <- PropertiesPattern.parse(pattern)
@@ -337,8 +333,8 @@ object IvyRepository {
       dropInfoAttributes,
       authentication
     ) match {
-      case \/-(repo) => repo
-      case -\/(msg) =>
+      case Right(repo) => repo
+      case Left(msg) =>
         throw new IllegalArgumentException(s"Error while parsing Ivy patterns: $msg")
     }
 }

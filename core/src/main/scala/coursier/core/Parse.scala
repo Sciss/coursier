@@ -1,7 +1,10 @@
 package coursier.core
 
 import java.util.regex.Pattern.quote
+
 import coursier.core.compatibility._
+
+import scala.util.matching.Regex
 
 object Parse {
 
@@ -67,7 +70,7 @@ object Parse {
       .orElse(versionInterval(s).map(VersionConstraint.interval))
   }
 
-  val fallbackConfigRegex = {
+  val fallbackConfigRegex: Regex = {
     val noPar = "([^" + quote("()") + "]*)"
     "^" + noPar + quote("(") + noPar + quote(")") + "$"
   }.r

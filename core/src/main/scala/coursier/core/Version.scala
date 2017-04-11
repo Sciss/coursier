@@ -9,13 +9,13 @@ import coursier.core.compatibility._
  *  Same kind of ordering as aether-util/src/main/java/org/eclipse/aether/util/version/GenericVersion.java
  */
 final case class Version(repr: String) extends Ordered[Version] {
-  lazy val items = Version.items(repr)
+  lazy val items: List[Version.Item] = Version.items(repr)
   lazy val rawItems: Seq[Version.Item] = {
     val (first, tokens) = Version.Tokenizer(repr)
     first +: tokens.toVector.map { case (_, item) => item }
   }
-  def compare(other: Version) = Version.listCompare(items, other.items)
-  def isEmpty = items.forall(_.isEmpty)
+  def compare(other: Version): Int = Version.listCompare(items, other.items)
+  def isEmpty: Boolean = items.forall(_.isEmpty)
 }
 
 object Version {
@@ -51,26 +51,26 @@ object Version {
     val order = 0
     def next: Number = Number(value + 1)
     def repr: String = value.toString
-    override def compareToEmpty = value.compare(0)
+    override def compareToEmpty: Int = value.compare(0)
   }
   final case class BigNumber(value: BigInt) extends Numeric {
     val order = 0
     def next: BigNumber = BigNumber(value + 1)
     def repr: String = value.toString
-    override def compareToEmpty = value.compare(0)
+    override def compareToEmpty: Int = value.compare(0)
   }
   final case class Qualifier(value: String, level: Int) extends Item {
-    val order = -2
-    override def compareToEmpty = level.compare(0)
+    val order: Int = -2
+    override def compareToEmpty: Int = level.compare(0)
   }
   final case class Literal(value: String) extends Item {
-    val order = -1
-    override def compareToEmpty = if (value.isEmpty) 0 else 1
+    val order: Int = -1
+    override def compareToEmpty: Int = if (value.isEmpty) 0 else 1
   }
 
   case object Min extends Item {
-    val order = -8
-    override def compareToEmpty = -1
+    val order: Int = -8
+    override def compareToEmpty: Int = -1
   }
   case object Max extends Item {
     val order = 8
@@ -78,7 +78,7 @@ object Version {
 
   val empty = Number(0)
 
-  val qualifiers = Seq[Qualifier](
+  val qualifiers: Seq[Qualifier] = Seq(
     Qualifier("alpha", -5),
     Qualifier("beta", -4),
     Qualifier("milestone", -3),
@@ -90,7 +90,7 @@ object Version {
     Qualifier("sp", 1)
   )
 
-  val qualifiersMap = qualifiers.map(q => q.value -> q).toMap
+  val qualifiersMap: Map[String, Qualifier] = qualifiers.map(q => q.value -> q).toMap
 
   object Tokenizer {
     sealed abstract class Separator

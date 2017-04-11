@@ -31,7 +31,7 @@ final case class Module(
   override def toString: String =
     s"$organization:$nameWithAttributes"
 
-  override final lazy val hashCode = Module.unapply(this).get.hashCode()
+  override lazy val hashCode: Int = Module.unapply(this).get.hashCode()
 }
 
 /**
@@ -52,9 +52,9 @@ final case class Dependency(
 
   transitive: Boolean
 ) {
-  lazy val moduleVersion = (module, version)
+  lazy val moduleVersion: (Module, String) = (module, version)
 
-  override lazy val hashCode = Dependency.unapply(this).get.hashCode()
+  override lazy val hashCode: Int = Dependency.unapply(this).get.hashCode()
 }
 
 // Maven-specific
@@ -96,7 +96,7 @@ final case class Project(
   // Extra infos, not used during resolution
   info: Info
 ) {
-  lazy val moduleVersion = (module, version)
+  lazy val moduleVersion: (Module, String) = (module, version)
 
   /** All configurations that each configuration extends, including the ones it extends transitively */
   lazy val allConfigurations: Map[String, Set[String]] =

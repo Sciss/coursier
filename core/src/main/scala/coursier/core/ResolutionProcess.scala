@@ -1,29 +1,26 @@
 package coursier
 package core
 
-import scalaz._
 import scala.annotation.tailrec
+import scala.concurrent.Future
 import scala.language.higherKinds
 
-
 sealed abstract class ResolutionProcess {
-  def run[F[_]](
-    fetch: Fetch.Metadata[F],
+  def run(
+    fetch: Fetch.Metadata,
     maxIterations: Int = 50
-  )(implicit
-    F: Monad[F]
-  ): F[Resolution] = {
+  ): Future[Resolution] = {
 
-    if (maxIterations == 0) F.point(current)
+    if (maxIterations == 0) Future.successful(current)
     else {
       val maxIterations0 =
         if (maxIterations > 0) maxIterations - 1 else maxIterations
 
       this match {
         case Done(res) =>
-          F.point(res)
+          Future.successful(res)
         case missing0 @ Missing(missing, _, _) =>
-          F.bind(fetch(missing))(result =>
+          fetch(missing).flatMap(result =>
             missing0.next(result).run(fetch, maxIterations0)
           )
         case cont @ Continue(_, _) =>
@@ -35,23 +32,21 @@ sealed abstract class ResolutionProcess {
   }
 
   @tailrec
-  final def next[F[_]](
-    fetch: Fetch.Metadata[F],
+  final def next(
+    fetch: Fetch.Metadata,
     fastForward: Boolean = true
-  )(implicit
-    F: Monad[F]
-  ): F[ResolutionProcess] = {
+  ): Future[ResolutionProcess] = {
 
     this match {
-      case Done(res) =>
-        F.point(this)
+      case Done(_) =>
+        Future.successful(this)
       case missing0 @ Missing(missing, _, _) =>
-        F.map(fetch(missing))(result => missing0.next(result))
+        fetch(missing).map(result => missing0.next(result))
       case cont @ Continue(_, _) =>
         if (fastForward)
           cont.nextNoCont.next(fetch, fastForward = fastForward)
         else
-          F.point(cont.next)
+          Future.successful(cont.next)
     }
   }
 
@@ -67,11 +62,11 @@ final case class Missing(
   def next(results: Fetch.MD): ResolutionProcess = {
 
     val errors = results.collect {
-      case (modVer, -\/(errs)) =>
+      case (modVer, Left(errs)) =>
         modVer -> errs
     }
     val successes = results.collect {
-      case (modVer, \/-(repoProj)) =>
+      case (modVer, Right(repoProj)) =>
         modVer -> repoProj
     }
 
@@ -96,7 +91,7 @@ final case class Missing(
           else {
             val min = map.map(_._2.size).min // should be 0
             val (toAdd, remaining) = map.partition {
-              case (k, v) => v.size == min
+              case (_ /* k */, v) => v.size == min
             }
             val acc0 = toAdd.keys.foldLeft(acc)(_.::(_))
             val remainingKeys = remaining.keySet.map(_._1)
@@ -110,10 +105,10 @@ final case class Missing(
         val orderedSuccesses = order(depMgmtMissing0.map { case (k, v) => k -> v.intersect(modVer) }.toMap, Nil)
 
         val res0 = orderedSuccesses.foldLeft(res) {
-          case (acc, (modVer, (source, proj))) =>
+          case (acc, (modVer1, (source, proj))) =>
             acc.copyWithCache(
               projectCache = acc.projectCache + (
-                modVer -> (source, acc.withDependencyManagement(proj))
+                modVer1 -> (source, acc.withDependencyManagement(proj))
               )
             )
         }
@@ -139,7 +134,7 @@ final case class Continue(
 
   def next: ResolutionProcess = cont(current)
 
-  @tailrec final def nextNoCont: ResolutionProcess =
+  @tailrec def nextNoCont: ResolutionProcess =
     next match {
       case nextCont: Continue => nextCont.nextNoCont
       case other => other

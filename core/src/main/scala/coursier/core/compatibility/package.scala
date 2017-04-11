@@ -10,8 +10,8 @@ import org.jsoup.Jsoup
 package object compatibility {
 
   implicit class RichChar(val c: Char) extends AnyVal {
-    def letterOrDigit = c.isLetterOrDigit
-    def letter = c.isLetter
+    def letterOrDigit : Boolean = c.isLetterOrDigit
+    def letter        : Boolean = c.isLetter
   }
 
   def xmlParse(s: String): Either[String, Xml.Node] = {
@@ -21,7 +21,7 @@ package object compatibility {
 
     def fromNode(node: scala.xml.Node): Xml.Node =
       new Xml.Node {
-        lazy val attributes = {
+        lazy val attributes: Vector[(String, String, String)] = {
           def helper(m: MetaData): Stream[(String, String, String)] =
             m match {
               case Null => Stream.empty
@@ -40,13 +40,13 @@ package object compatibility {
 
           helper(node.attributes).toVector
         }
-        def label = node.label
-        def children = node.child.map(fromNode)
-        def isText = node match { case _: scala.xml.Text => true; case _ => false }
-        def textContent = node.text
-        def isElement = node match { case _: scala.xml.Elem => true; case _ => false }
+        def label: String = node.label
+        def children: Seq[Xml.Node] = node.child.map(fromNode)
+        def isText: Boolean = node match { case _: scala.xml.Text => true; case _ => false }
+        def textContent: String = node.text
+        def isElement: Boolean = node match { case _: scala.xml.Elem => true; case _ => false }
 
-        override def toString = node.toString
+        override def toString: String = node.toString
       }
 
     parse.right
