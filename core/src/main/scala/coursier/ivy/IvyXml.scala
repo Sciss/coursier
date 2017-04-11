@@ -3,29 +3,29 @@ package coursier.ivy
 import coursier.core._
 import coursier.util.Xml._
 
-import scalaz.{ Node => _, _ }, Scalaz._
-
 object IvyXml {
 
   val attributesNamespace = "http://ant.apache.org/ivy/extra"
 
-  private def info(node: Node): String \/ (Module, String) =
+  private def info(node: Node): Either[String, (Module, String)] =
     for {
-      org <- node.attribute("organisation")
-      name <- node.attribute("module")
-      version <- node.attribute("revision")
-      attr = node.attributesFromNamespace(attributesNamespace)
-    } yield (Module(org, name, attr.toMap), version)
+      org     <- node.attribute("organisation").right
+      name    <- node.attribute("module")      .right
+      version <- node.attribute("revision")    .right
+    } yield {
+      val attr = node.attributesFromNamespace(attributesNamespace)
+      (Module(org, name, attr.toMap), version)
+    }
 
   // FIXME Errors are ignored here
   private def configurations(node: Node): Seq[(String, Seq[String])] =
     node.children
       .filter(_.label == "conf")
       .flatMap { node =>
-        node.attribute("name").toOption.toSeq.map(_ -> node)
+        node.attributeOpt("name").toSeq.map(_ -> node)
       }
-      .map { case (name, node) =>
-        name -> node.attribute("extends").toOption.toSeq.flatMap(_.split(','))
+      .map { case (name, nodeC) =>
+        name -> nodeC.attributeOpt("extends").toSeq.flatMap(_.split(','))
       }
 
   // FIXME "default(compile)" likely not to be always the default
@@ -52,9 +52,9 @@ object IvyXml {
         val excludes = node.children
           .filter(_.label == "exclude")
           .flatMap { node0 =>
-            val org = node0.attribute("org").getOrElse("*")
-            val name = node0.attribute("module").orElse(node0.attribute("name")).getOrElse("*")
-            val confs = node0.attribute("conf").toOption.filter(_.nonEmpty).fold(Seq("*"))(_.split(','))
+            val org = node0.attributeOpt("org").getOrElse("*")
+            val name = node0.attributeOpt("module").orElse(node0.attributeOpt("name")).getOrElse("*")
+            val confs = node0.attributeOpt("conf").filter(_.nonEmpty).fold(Seq("*"))(_.split(','))
             confs.map(_ -> (org, name))
           }
           .groupBy { case (conf, _) => conf }
@@ -63,14 +63,14 @@ object IvyXml {
         val allConfsExcludes = excludes.getOrElse("*", Set.empty)
 
         for {
-          org <- node.attribute("org").toOption.toSeq
-          name <- node.attribute("name").toOption.toSeq
-          version <- node.attribute("rev").toOption.toSeq
-          rawConf <- node.attribute("conf").toOption.toSeq
+          org     <- node.attributeOpt("org") .toSeq
+          name    <- node.attributeOpt("name").toSeq
+          version <- node.attributeOpt("rev") .toSeq
+          rawConf <- node.attributeOpt("conf").toSeq
           (fromConf, toConf) <- mappings(rawConf)
           attr = node.attributesFromNamespace(attributesNamespace)
         } yield {
-          val transitive = node.attribute("transitive").toOption match {
+          val transitive = node.attributeOpt("transitive") match {
             case Some("false") => false
             case _ => true
           }
@@ -91,23 +91,23 @@ object IvyXml {
     node.children
       .filter(_.label == "artifact")
       .flatMap { node =>
-        val name = node.attribute("name").getOrElse("")
-        val type0 = node.attribute("type").getOrElse("jar")
-        val ext = node.attribute("ext").getOrElse(type0)
-        val confs = node.attribute("conf").toOption.fold(Seq("*"))(_.split(','))
-        val classifier = node.attribute("classifier").toOption.getOrElse("")
+        val name        = node.attributeOpt("name") .getOrElse("")
+        val type0       = node.attributeOpt("type") .getOrElse("jar")
+        val ext         = node.attributeOpt("ext")  .getOrElse(type0)
+        val confs       = node.attributeOpt("conf").fold(Seq("*"))(_.split(','))
+        val classifier  = node.attributeOpt("classifier").getOrElse("")
         confs.map(_ -> Publication(name, type0, ext, classifier))
       }
       .groupBy { case (conf, _) => conf }
       .map { case (conf, l) => conf -> l.map { case (_, p) => p } }
 
-  def project(node: Node): String \/ Project =
+  def project(node: Node): Either[String, Project] =
     for {
       infoNode <- node.children
         .find(_.label == "info")
-        .toRightDisjunction("Info not found")
+        .fold[Either[String, Node]](Left("Info not found"))(Right(_)).right
 
-      modVer <- info(infoNode)
+      modVer <- info(infoNode).right
     } yield {
 
       val (module, version) = modVer
@@ -137,13 +137,12 @@ object IvyXml {
       val licenses = infoNode.children
         .filter(_.label == "license")
         .flatMap { n =>
-          n.attribute("name").toOption.map { name =>
-            (name, n.attribute("url").toOption)
+          n.attributeOpt("name").map { name =>
+            (name, n.attributeOpt("url"))
           }.toSeq
         }
 
-      val publicationDate = infoNode.attribute("publication")
-        .toOption
+      val publicationDate = infoNode.attributeOpt("publication")
         .flatMap(parseDateTime)
 
       Project(

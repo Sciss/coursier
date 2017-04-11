@@ -2,8 +2,6 @@ package coursier.maven
 
 import coursier.core._
 
-import scalaz._
-
 object Pom {
   import coursier.util.Xml._
 
@@ -16,18 +14,18 @@ object Pom {
     * @return the key and the value of the property
     * @see [[https://issues.apache.org/jira/browse/MNG-5380]]
     */
-  def property(elem: Node): String \/ (String, String) = {
+  def property(elem: Node): Either[String, (String, String)] = {
     // Not matching with Text, which fails on scala-js if the property value has xml comments
-    if (elem.isElement) \/-(elem.label -> elem.textContent.trim)
-    else -\/(s"Can't parse property $elem")
+    if (elem.isElement) Right(elem.label -> elem.textContent.trim)
+    else Left(s"Can't parse property $elem")
   }
 
   // TODO Allow no version in some contexts
-  private def module(node: Node, groupIdIsOptional: Boolean = false): String \/ Module = {
+  private def module(node: Node, groupIdIsOptional: Boolean = false): Either[String, Module] = {
     for {
       organization <- {
         val e = text(node, "groupId", "Organization")
-        if (groupIdIsOptional) e.orElse(\/-(""))
+        if (groupIdIsOptional) e.orElse(Some(""))
         else e
       }
       name <- text(node, "artifactId", "Name")
@@ -37,22 +35,21 @@ object Pom {
   private def readVersion(node: Node) =
     text(node, "version", "Version").getOrElse("").trim
 
-  def dependency(node: Node): String \/ (String, Dependency) = {
+  def dependency(node: Node): Either[String, (String, Dependency)] = {
     for {
       mod <- module(node)
       version0 = readVersion(node)
-      scopeOpt = text(node, "scope", "").toOption
-      typeOpt = text(node, "type", "").toOption
-      classifierOpt = text(node, "classifier", "").toOption
+      scopeOpt = text(node, "scope", "")
+      typeOpt = text(node, "type", "")
+      classifierOpt = text(node, "classifier", "")
       xmlExclusions = node.children
         .find(_.label == "exclusions")
         .map(_.children.filter(_.label == "exclusion"))
         .getOrElse(Seq.empty)
       exclusions <- {
-        import Scalaz._
         xmlExclusions.toList.traverseU(module(_))
       }
-      optional = text(node, "optional", "").toOption.toSeq.contains("true")
+      optional = text(node, "optional", "").toSeq.contains("true")
     } yield scopeOpt.getOrElse("") -> Dependency(
         mod,
         version0,
@@ -66,7 +63,7 @@ object Pom {
 
   private def profileActivation(node: Node): (Option[Boolean], Activation) = {
     val byDefault =
-      text(node, "activeByDefault", "").toOption.flatMap{
+      text(node, "activeByDefault", "").flatMap{
         case "true" => Some(true)
         case "false" => Some(false)
         case _ => None
@@ -76,23 +73,23 @@ object Pom {
       .filter(_.label == "property")
       .flatMap{ p =>
         for{
-          name <- text(p, "name", "").toOption
-          valueOpt = text(p, "value", "").toOption
+          name <- text(p, "name", "")
+          valueOpt = text(p, "value", "")
         } yield (name, valueOpt)
       }
 
     val osNodeOpt = node.children.collectFirst { case n if n.label == "os" => n }
 
     val os = Activation.Os(
-      osNodeOpt.flatMap(n => text(n, "arch", "").toOption),
-      osNodeOpt.flatMap(n => text(n, "family", "").toOption).toSet,
-      osNodeOpt.flatMap(n => text(n, "name", "").toOption),
-      osNodeOpt.flatMap(n => text(n, "version", "").toOption)
+      osNodeOpt.flatMap(n => text(n, "arch", "")),
+      osNodeOpt.flatMap(n => text(n, "family", "")).toSet,
+      osNodeOpt.flatMap(n => text(n, "name", "")),
+      osNodeOpt.flatMap(n => text(n, "version", ""))
     )
 
-    val jdk = text(node, "jdk", "").toOption.flatMap { s =>
-      Parse.versionInterval(s).map(-\/(_))
-        .orElse(Parse.version(s).map(v => \/-(Seq(v))))
+    val jdk = text(node, "jdk", "").flatMap { s =>
+      Parse.versionInterval(s).map(Left(_))
+        .orElse(Parse.version(s).map(v => Right(Seq(v))))
     }
 
     val activation = Activation(properties, os, jdk)
@@ -100,9 +97,7 @@ object Pom {
     (byDefault, activation)
   }
 
-  def profile(node: Node): String \/ Profile = {
-    import Scalaz._
-
+  def profile(node: Node): Either[String, Profile] = {
     val id = text(node, "id", "Profile ID").getOrElse("")
 
     val xmlActivationOpt = node.children
@@ -130,7 +125,6 @@ object Pom {
         .getOrElse(Seq.empty)
 
       properties <- {
-        import Scalaz._
         xmlProperties.toList.traverseU(property)
       }
 
@@ -138,20 +132,18 @@ object Pom {
   }
 
   def packagingOpt(pom: Node): Option[String] =
-    text(pom, "packaging", "").toOption
+    text(pom, "packaging", "")
 
-  def project(pom: Node): String \/ Project = {
-    import Scalaz._
-
+  def project(pom: Node): Either[String, Project] = {
     for {
       projModule <- module(pom, groupIdIsOptional = true)
       projVersion = readVersion(pom)
 
       parentOpt = pom.children
         .find(_.label == "parent")
-      parentModuleOpt <- parentOpt
-        .map(module(_).map(Some(_)))
-        .getOrElse(\/-(None))
+      parentModuleOpt: Option[Module] <- parentOpt
+        .map(module(_).right.map(Some(_)))
+        .getOrElse(Right(None))
       parentVersionOpt = parentOpt
         .map(readVersion)
 
@@ -176,11 +168,11 @@ object Pom {
         .toRightDisjunction("No version found")
 
       _ <- parentVersionOpt
-        .map(v => if (v.isEmpty) -\/("Parent version missing") else \/-(()))
-        .getOrElse(\/-(()))
+        .map(v => if (v.isEmpty) Left("Parent version missing") else Right(()))
+        .getOrElse(Right(()))
       _ <- parentModuleOpt
-        .map(mod => if (mod.organization.isEmpty) -\/("Parent organization missing") else \/-(()))
-        .getOrElse(\/-(()))
+        .map(mod => if (mod.organization.isEmpty) Left("Parent organization missing") else Right(()))
+        .getOrElse(Right(()))
 
       xmlProperties = pom.children
         .find(_.label == "properties")
@@ -196,7 +188,7 @@ object Pom {
 
       extraAttrs <- properties
         .collectFirst { case ("extraDependencyAttributes", s) => extraAttributes(s) }
-        .getOrElse(\/-(Map.empty))
+        .getOrElse(Right(Map.empty))
 
       extraAttrsMap = extraAttrs.map {
         case (mod, ver) =>
@@ -221,8 +213,8 @@ object Pom {
         .flatMap(_.children)
         .filter(_.label == "license")
         .flatMap { n =>
-          text(n, "name", "License name").toOption.map { name =>
-            (name, text(n, "url", "License URL").toOption)
+          text(n, "name", "License name").map { name =>
+            (name, text(n, "url", "License URL"))
           }.toSeq
         }
 
@@ -239,7 +231,7 @@ object Pom {
           } yield Info.Developer(id, name, url)
         }
         .collect {
-          case \/-(d) => d
+          case Right(d) => d
         }
 
       Project(
@@ -273,9 +265,7 @@ object Pom {
     }
   }
 
-  def versions(node: Node): String \/ Versions = {
-    import Scalaz._
-
+  def versions(node: Node): Either[String, Versions] = {
     for {
       organization <- text(node, "groupId", "Organization") // Ignored
       name <- text(node, "artifactId", "Name") // Ignored
@@ -294,16 +284,14 @@ object Pom {
         .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
 
       lastUpdatedOpt = text(xmlVersioning, "lastUpdated", "Last update date and time")
-        .toOption
         .flatMap(parseDateTime)
 
     } yield Versions(latest, release, versionsOpt.map(_.toList).getOrElse(Nil), lastUpdatedOpt)
   }
 
-  def snapshotVersion(node: Node): String \/ SnapshotVersion = {
+  def snapshotVersion(node: Node): Either[String, SnapshotVersion] = {
     def textOrEmpty(name: String, desc: String) =
       text(node, name, desc)
-        .toOption
         .getOrElse("")
 
     val classifier = textOrEmpty("classifier", "Classifier")
@@ -311,10 +299,9 @@ object Pom {
     val value = textOrEmpty("value", "Value")
 
     val updatedOpt = text(node, "updated", "Updated")
-      .toOption
       .flatMap(parseDateTime)
 
-    \/-(SnapshotVersion(
+    Right(SnapshotVersion(
       classifier,
       ext,
       value,
@@ -322,9 +309,7 @@ object Pom {
     ))
   }
 
-  def snapshotVersioning(node: Node): String \/ SnapshotVersioning = {
-    import Scalaz._
-
+  def snapshotVersioning(node: Node): Either[String, SnapshotVersioning] = {
     // FIXME Quite similar to Versions above
     for {
       organization <- text(node, "groupId", "Organization")
@@ -345,7 +330,6 @@ object Pom {
         .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
 
       lastUpdatedOpt = text(xmlVersioning, "lastUpdated", "Last update date and time")
-        .toOption
         .flatMap(parseDateTime)
 
       xmlSnapshotOpt = xmlVersioning.children
@@ -354,14 +338,12 @@ object Pom {
       timestamp = xmlSnapshotOpt
         .flatMap(
           text(_, "timestamp", "Snapshot timestamp")
-            .toOption
         )
         .getOrElse("")
 
       buildNumber = xmlSnapshotOpt
         .flatMap(
           text(_, "buildNumber", "Snapshot build number")
-            .toOption
         )
         .filter(s => s.nonEmpty && s.forall(_.isDigit))
         .map(_.toInt)
@@ -369,7 +351,6 @@ object Pom {
       localCopy = xmlSnapshotOpt
         .flatMap(
           text(_, "localCopy", "Snapshot local copy")
-            .toOption
         )
         .collect{
           case "true" => true
@@ -412,7 +393,7 @@ object Pom {
 
   val extraAttributeDropPrefix = "e:"
 
-  def extraAttribute(s: String): String \/ (Module, String) = {
+  def extraAttribute(s: String): Either[String, (Module, String)] = {
     // vaguely does the same as:
     // https://github.com/apache/ant-ivy/blob/2.2.0/src/java/org/apache/ivy/core/module/id/ModuleRevisionId.java#L291
 
@@ -424,17 +405,15 @@ object Pom {
       if (rawParts.length % 2 == 0) {
         val malformed = rawParts.filter(!_.startsWith(extraAttributePrefix))
         if (malformed.isEmpty)
-          \/-(rawParts.map(_.drop(extraAttributePrefix.length)))
+          Right(rawParts.map(_.drop(extraAttributePrefix.length)))
         else
-          -\/(s"Malformed attributes ${malformed.map("'"+_+"'").mkString(", ")} in extra attributes '$s'")
+          Left(s"Malformed attributes ${malformed.map("'"+_+"'").mkString(", ")} in extra attributes '$s'")
       } else
-        -\/(s"Malformed extra attributes '$s'")
+        Left(s"Malformed extra attributes '$s'")
 
-    def attrFrom(attrs: Map[String, String], name: String): String \/ String =
-      \/.fromEither(
-        attrs.get(name)
-          .toRight(s"$name not found in extra attributes '$s'")
-      )
+    def attrFrom(attrs: Map[String, String], name: String): Either[String, String] =
+      attrs.get(name)
+        .toRight(s"$name not found in extra attributes '$s'")
 
     for {
       parts <- partsOrError
@@ -442,20 +421,20 @@ object Pom {
         case Seq(k, v) if v != "NULL" =>
           k.stripPrefix(extraAttributeDropPrefix) -> v
       }.toMap
-      org <- attrFrom(attrs, extraAttributeOrg)
-      name <- attrFrom(attrs, extraAttributeName)
-      version <- attrFrom(attrs, extraAttributeVersion)
+      org     <- attrFrom(attrs, extraAttributeOrg).right
+      name    <- attrFrom(attrs, extraAttributeName).right
+      version <- attrFrom(attrs, extraAttributeVersion).right
       remainingAttrs = attrs.filterKeys(!extraAttributeBase(_))
     } yield (Module(org, name, remainingAttrs.toVector.toMap), version)
   }
 
-  def extraAttributes(s: String): String \/ Seq[(Module, String)] = {
+  def extraAttributes(s: String): Either[String, Seq[(Module, String)]] = {
     val lines = s.split('\n').toSeq.map(_.trim).filter(_.nonEmpty)
 
-    lines.foldLeft[String \/ Seq[(Module, String)]](\/-(Vector.empty)) {
+    lines.foldLeft[Either[String, Seq[(Module, String)]]](Right(Vector.empty)) {
       case (acc, line) =>
         for {
-          modVers <- acc
+          modVers <- acc.right
           modVer <- extraAttribute(line)
         } yield modVers :+ modVer
     }

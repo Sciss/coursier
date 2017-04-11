@@ -2,14 +2,14 @@ package coursier
 package core
 
 import scala.annotation.tailrec
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
 
 sealed abstract class ResolutionProcess {
   def run(
     fetch: Fetch.Metadata,
     maxIterations: Int = 50
-  ): Future[Resolution] = {
+  )(implicit exec: ExecutionContext): Future[Resolution] = {
 
     if (maxIterations == 0) Future.successful(current)
     else {
@@ -35,7 +35,7 @@ sealed abstract class ResolutionProcess {
   final def next(
     fetch: Fetch.Metadata,
     fastForward: Boolean = true
-  ): Future[ResolutionProcess] = {
+  )(implicit exec: ExecutionContext): Future[ResolutionProcess] = {
 
     this match {
       case Done(_) =>

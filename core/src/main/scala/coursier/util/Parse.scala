@@ -6,9 +6,6 @@ import coursier.maven.MavenRepository
 
 import scala.collection.mutable.ArrayBuffer
 
-import scalaz.\/
-import scalaz.Scalaz.ToEitherOps
-
 object Parse {
 
   private def defaultScalaVersion = scala.util.Properties.versionNumberString
@@ -181,26 +178,25 @@ object Parse {
   def moduleVersionConfigs(l: Seq[String], defaultScalaVersion: String): (Seq[String], Seq[(Module, String, Option[String])]) =
     valuesAndErrors(moduleVersionConfig(_, defaultScalaVersion), l)
 
-  def repository(s: String): String \/ Repository =
+  def repository(s: String): Either[String, Repository] =
     if (s == "central")
-      MavenRepository("https://repo1.maven.org/maven2").right
+      Right(MavenRepository("https://repo1.maven.org/maven2"))
     else if (s.startsWith("sonatype:"))
-      MavenRepository(s"https://oss.sonatype.org/content/repositories/${s.stripPrefix("sonatype:")}").right
+      Right(MavenRepository(s"https://oss.sonatype.org/content/repositories/${s.stripPrefix("sonatype:")}"))
     else if (s.startsWith("bintray:"))
-      MavenRepository(s"https://dl.bintray.com/${s.stripPrefix("bintray:")}").right
+      Right(MavenRepository(s"https://dl.bintray.com/${s.stripPrefix("bintray:")}"))
     else if (s.startsWith("bintray-ivy:"))
-      IvyRepository.fromPattern(
+      Right(IvyRepository.fromPattern(
         s"https://dl.bintray.com/${s.stripPrefix("bintray-ivy:").stripSuffix("/")}" +: "/" +:
           coursier.ivy.Pattern.default
-      ).right
+      ))
     else if (s.startsWith("typesafe:ivy-"))
-      IvyRepository.fromPattern(
+      Right(IvyRepository.fromPattern(
         (s"https://repo.typesafe.com/typesafe/ivy-" + s.stripPrefix("typesafe:ivy-") + "/") +:
           coursier.ivy.Pattern.default
-      ).right
+      ))
     else if (s.startsWith("ivy:"))
       IvyRepository.parse(s.stripPrefix("ivy:"))
     else
-      MavenRepository(s).right
-
+      Right(MavenRepository(s))
 }

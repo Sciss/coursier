@@ -6,10 +6,10 @@ import scala.concurrent.Future
 import scala.language.higherKinds
 
 trait Repository extends Product with Serializable {
-  def find[F[_]](
+  def find(
     module: Module,
     version: String,
-    fetch: Fetch.Content[F]
+    fetch: Fetch.Content
   ): Future[Either[String, (Artifact.Source, Project)]]
 }
 

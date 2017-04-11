@@ -1,12 +1,11 @@
 package coursier
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
 
 object Fetch {
 
-  type Content[F[_]] = Artifact => EitherT[F, String, String]
-
+  type Content = Artifact => Future[Either[String, String]]
 
   type MD = Seq[(
     (Module, String),
@@ -26,50 +25,46 @@ object Fetch {
     * version (e.g. version interval). Which version get chosen depends on
     * the repository implementation.
     */
-  def find[F[_]](
+  def find(
     repositories: Seq[Repository],
     module: Module,
     version: String,
-    fetch: Content[F]
-  )(implicit
-    F: Monad[F]
-  ): Future[Either[Seq[String], (Artifact.Source, Project)]] = {
+    fetch: Content
+  )(implicit exec: ExecutionContext): Future[Either[Seq[String], (Artifact.Source, Project)]] = {
 
-    val lookups = repositories
-      .map(repo => repo -> repo.find(module, version, fetch).run)
+    val lookups: Seq[(Repository, Future[Either[String, (Artifact.Source, Project)]])] =
+      repositories.map(repo => repo -> repo.find(module, version, fetch) /* .run */)
 
-    val task = lookups.foldLeft[F[Seq[String] \/ (Artifact.Source, Project)]](F.point(-\/(Nil))) {
-      case (acc, (repo, eitherProjTask)) =>
-        F.bind(acc) {
+    val task = lookups.foldLeft[Future[Either[Seq[String], (Artifact.Source, Project)]]](Future.successful(Left(Nil))) {
+      case (acc, (_ /* repo */, eitherProjTask)) =>
+        acc.flatMap {
           case Left(errors) =>
-            F.map(eitherProjTask)(_.leftMap(error => error +: errors))
+            eitherProjTask.map(_.left.map(error => error +: errors))
           case res @ Right(_) =>
-            F.point(res)
+            Future.successful(res)
         }
     }
 
-    EitherT(F.map(task)(_.leftMap(_.reverse)))
+    task.map(_.left.map(_.reverse))
   }
 
-  def from[F[_]](
+  def from(
     repositories: Seq[core.Repository],
-    fetch: Content[F],
-    extra: Content[F]*
-  )(implicit
-    F: Nondeterminism[F]
-  ): Metadata[F] = {
-
-    modVers =>
-      F.map(
-        F.gatherUnordered(
-          modVers.map { case (module, version) =>
-            def get(fetch: Content[F]) =
-              find(repositories, module, version, fetch)
-            F.map((get(fetch) /: extra)(_ orElse get(_))
-              .run)((module, version) -> _)
-          }
-        )
-      )(_.toSeq)
+    fetch: Content,
+    extra: Content*
+  ): Metadata = {
+    ???
+//    modVers: Seq[(Module, String)] =>
+//      (
+//        /* F.gatherUnordered( */
+//          modVers.map { case (module, version) =>
+//
+//            def get(fetch: Content): Future[Either[Seq[String], (Artifact.Source, Project)]] =
+//              find(repositories, module, version, fetch)
+//
+//            ((get(fetch) /: extra)((fut, f) =>  _ orElse get(f))).map((module, version) -> _)
+//          }
+//        /* ) */
+//      ).map(_.toSeq)
   }
-
 }
