@@ -41,20 +41,21 @@ object Pom {
 
   def dependency(node: Node): Either[String, (String, Dependency)] = {
     for {
-      mod <- module(node)
-      version0      = readVersion(node)
-      scopeOpt      = textOpt(node, "scope"      , "")
-      typeOpt       = textOpt(node, "type"       , "")
-      classifierOpt = textOpt(node, "classifier" , "")
-      xmlExclusions: Seq[Node] = node.children
-        .find(_.label == "exclusions")
-        .map(_.children.filter(_.label == "exclusion"))
-        .getOrElse(Seq.empty)
+      mod <- module(node).right
       exclusions: Seq[Module] <- {
+        val xmlExclusions: Seq[Node] = node.children
+          .find(_.label == "exclusions")
+          .map(_.children.filter(_.label == "exclusion"))
+          .getOrElse(Seq.empty)
         xmlExclusions.toList.traverseU[String, Module](module(_)).right
       }
-      optional = textOpt(node, "optional", "").toSeq.contains("true")
-    } yield scopeOpt.getOrElse("") -> Dependency(
+    } yield {
+      val version0      = readVersion(node)
+      val scopeOpt      = textOpt(node, "scope"      , "")
+      val typeOpt       = textOpt(node, "type"       , "")
+      val classifierOpt = textOpt(node, "classifier" , "")
+      val optional      = textOpt(node, "optional", "").toSeq.contains("true")
+      scopeOpt.getOrElse("") -> Dependency(
         mod,
         version0,
         "",
@@ -63,6 +64,7 @@ object Pom {
         optional,
         transitive = true
       )
+    }
   }
 
   private def profileActivation(node: Node): (Option[Boolean], Activation) = {
@@ -142,24 +144,24 @@ object Pom {
 
   def project(pom: Node): Either[String, Project] = {
     for {
-      projModule <- module(pom, groupIdIsOptional = true)
+      projModule <- module(pom, groupIdIsOptional = true).right
       projVersion = readVersion(pom)
 
-      parentOpt = pom.children
+      parentOpt: Option[Node] = pom.children
         .find(_.label == "parent")
       parentModuleOpt: Option[Module] <- parentOpt
         .map(module(_).right.map(Some(_)))
         .getOrElse(Right(None))
-      parentVersionOpt = parentOpt
+      parentVersionOpt: Option[String] = parentOpt
         .map(readVersion)
 
-      xmlDeps = pom.children
+      xmlDeps: Seq[Node] = pom.children
         .find(_.label == "dependencies")
         .map(_.children.filter(_.label == "dependency"))
         .getOrElse(Seq.empty)
       deps <- xmlDeps.toList.traverseU(dependency)
 
-      xmlDepMgmts = pom.children
+      xmlDepMgmts: Seq[Node] = pom.children
         .find(_.label == "dependencyManagement")
         .flatMap(_.children.find(_.label == "dependencies"))
         .map(_.children.filter(_.label == "dependency"))
@@ -407,7 +409,7 @@ object Pom {
 
     val rawParts = s.split(extraAttributeSeparator).toSeq
 
-    val partsOrError =
+    val partsOrError: Either[String, Seq[String]] =
       if (rawParts.length % 2 == 0) {
         val malformed = rawParts.filter(!_.startsWith(extraAttributePrefix))
         if (malformed.isEmpty)
@@ -422,7 +424,7 @@ object Pom {
         .toRight(s"$name not found in extra attributes '$s'")
 
     for {
-      parts <- partsOrError
+      parts <- partsOrError.right
       attrs = parts.grouped(2).collect {
         case Seq(k, v) if v != "NULL" =>
           k.stripPrefix(extraAttributeDropPrefix) -> v

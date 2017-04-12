@@ -8,15 +8,15 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
 
 final case class IvyRepository(
-  pattern: Pattern,
+  pattern           : Pattern,
   metadataPatternOpt: Option[Pattern],
-  changing: Option[Boolean],
-  withChecksums: Boolean,
-  withSignatures: Boolean,
-  withArtifacts: Boolean,
+  changing          : Option[Boolean],
+  withChecksums     : Boolean,
+  withSignatures    : Boolean,
+  withArtifacts     : Boolean,
   // hack for SBT putting infos in properties
   dropInfoAttributes: Boolean,
-  authentication: Option[Authentication]
+  authentication    : Option[Authentication]
 ) extends Repository {
 
   def metadataPattern: Pattern = metadataPatternOpt.getOrElse(pattern)
@@ -121,13 +121,10 @@ final case class IvyRepository(
     else
       Artifact.Source.empty
 
-  type FindContent = Either[String, (Artifact.Source, Project)]
-  type FindResult  = Future[FindContent]
-
   def find(
-    module: Module,
-    version: String,
-    fetch: Fetch.Content
+    module  : Module,
+    version : String,
+    fetch   : Fetch.Content
   )(implicit exec: ExecutionContext): FindResult = {
 
     revisionListingPatternOpt match {
@@ -197,7 +194,7 @@ final case class IvyRepository(
     module: Module,
     version: String,
     fetch: Fetch.Content
-  ): FindResult = {
+  )(implicit exec: ExecutionContext): FindResult = {
 
     val eitherArtifact: Either[String, Artifact] =
       for {
@@ -222,49 +219,50 @@ final case class IvyRepository(
         artifact
       }
 
-    for {
-      artifact <- eitherArtifact.right // EitherT(F.point(eitherArtifact))
-      ivyFut   <- fetch(artifact)
-      ivy      <- ivyFut.right
-      proj0    <- ( /* EitherT(F.point { */
-        for {
-          xml <- compatibility.xmlParse(ivy).right
-          _ <- (if (xml.label == "ivy-module") Right(()) else Left("Module definition not found")).right
-          proj <- IvyXml.project(xml).right
-        } yield proj
-      /* }) */
-      ) . right
-    } yield {
-      val proj =
-        if (dropInfoAttributes)
-          proj0.copy(
-            module = proj0.module.copy(
-              attributes = proj0.module.attributes.filter {
-                case (k, _) => !k.startsWith("info.")
-              }
-            ),
-            dependencies = proj0.dependencies.map {
-              case (config, dep0) =>
-                val dep = dep0.copy(
-                  module = dep0.module.copy(
-                    attributes = dep0.module.attributes.filter {
-                      case (k, _) => !k.startsWith("info.")
-                    }
-                  )
-                )
+    eitherArtifact.fold[FindResult](err => Future.successful(Left(err)), { artifact =>
+      val ivyFut = fetch(artifact)
+      ivyFut.map { ivyE =>
+        ivyE.fold[FindContent](err => Left(err), { ivy =>
+          val xmlE = compatibility.xmlParse(ivy)
+          xmlE.fold[FindContent](err => Left(err), { xml =>
+            if (xml.label != "ivy-module") Left("Module definition not found")
+            else {
+              val projE = IvyXml.project(xml)
+              projE.fold[FindContent](err => Left(err), { proj0 =>
+                val proj =
+                  if (dropInfoAttributes)
+                    proj0.copy(
+                      module = proj0.module.copy(
+                        attributes = proj0.module.attributes.filter {
+                          case (k, _) => !k.startsWith("info.")
+                        }
+                      ),
+                      dependencies = proj0.dependencies.map {
+                        case (config, dep0) =>
+                          val dep = dep0.copy(
+                            module = dep0.module.copy(
+                              attributes = dep0.module.attributes.filter {
+                                case (k, _) => !k.startsWith("info.")
+                              }
+                            )
+                          )
 
-                config -> dep
+                          config -> dep
+                      }
+                    )
+                  else
+                    proj0
+
+                Right(source -> proj.copy(
+                  actualVersionOpt = Some(version)
+                ))
+              })
             }
-          )
-        else
-          proj0
-
-      source -> proj.copy(
-        actualVersionOpt = Some(version)
-      )
-    }
+          })
+        })
+      }
+    })
   }
-
 }
 
 object IvyRepository {
@@ -282,37 +280,41 @@ object IvyRepository {
   ): Either[String, IvyRepository] =
 
     for {
-      propertiesPattern <- PropertiesPattern.parse(pattern)
-      metadataPropertiesPatternOpt <- metadataPatternOpt.fold(Option.empty[PropertiesPattern].right[String])(PropertiesPattern.parse(_).map(Some(_)))
+      propertiesPattern            <- PropertiesPattern.parse(pattern).right
+      metadataPropertiesPatternOpt <- metadataPatternOpt
+        .fold[Either[String, Option[PropertiesPattern]]](Right(None))(p => PropertiesPattern.parse(p).right.map(Some(_)))
+        .right
 
-      pattern <- propertiesPattern.substituteProperties(properties)
-      metadataPatternOpt <- metadataPropertiesPatternOpt.fold(Option.empty[Pattern].right[String])(_.substituteProperties(properties).map(Some(_)))
+      pattern <- propertiesPattern.substituteProperties(properties).right
+      metadataPatternOpt <- metadataPropertiesPatternOpt
+        .fold[Either[String, Option[Pattern]]](Right(None))(p => p.substituteProperties(properties).right.map(Some(_)))
+        .right
 
     } yield
       IvyRepository(
         pattern,
         metadataPatternOpt,
-        changing,
-        withChecksums,
-        withSignatures,
-        withArtifacts,
-        dropInfoAttributes,
-        authentication
+        changing            = changing,
+        withChecksums       = withChecksums,
+        withSignatures      = withSignatures,
+        withArtifacts       = withArtifacts,
+        dropInfoAttributes  = dropInfoAttributes,
+        authentication      = authentication
       )
 
   // because of the compatibility apply method below, we can't give default values
   // to the default constructor of IvyPattern
   // this method accepts the same arguments as this constructor, with default values when possible
   def fromPattern(
-    pattern: Pattern,
-    metadataPatternOpt: Option[Pattern] = None,
-    changing: Option[Boolean] = None,
-    withChecksums: Boolean = true,
-    withSignatures: Boolean = true,
-    withArtifacts: Boolean = true,
+    pattern           : Pattern,
+    metadataPatternOpt: Option[Pattern]         = None,
+    changing          : Option[Boolean]         = None,
+    withChecksums     : Boolean                 = true,
+    withSignatures    : Boolean                 = true,
+    withArtifacts     : Boolean                 = true,
     // hack for SBT putting infos in properties
-    dropInfoAttributes: Boolean = false,
-    authentication: Option[Authentication] = None
+    dropInfoAttributes: Boolean                 = false,
+    authentication    : Option[Authentication]  = None
   ): IvyRepository =
     IvyRepository(
       pattern,
@@ -327,27 +329,27 @@ object IvyRepository {
 
   @deprecated("Can now raise exceptions - use parse instead", "1.0.0-M13")
   def apply(
-    pattern: String,
-    metadataPatternOpt: Option[String] = None,
-    changing: Option[Boolean] = None,
-    properties: Map[String, String] = Map.empty,
-    withChecksums: Boolean = true,
-    withSignatures: Boolean = true,
-    withArtifacts: Boolean = true,
+    pattern           : String,
+    metadataPatternOpt: Option[String]          = None,
+    changing          : Option[Boolean]         = None,
+    properties        : Map[String, String]     = Map.empty,
+    withChecksums     : Boolean                 = true,
+    withSignatures    : Boolean                 = true,
+    withArtifacts     : Boolean                 = true,
     // hack for SBT putting infos in properties
-    dropInfoAttributes: Boolean = false,
-    authentication: Option[Authentication] = None
+    dropInfoAttributes: Boolean                 = false,
+    authentication    : Option[Authentication]  = None
   ): IvyRepository =
     parse(
       pattern,
-      metadataPatternOpt,
-      changing,
-      properties,
-      withChecksums,
-      withSignatures,
-      withArtifacts,
-      dropInfoAttributes,
-      authentication
+      metadataPatternOpt  = metadataPatternOpt,
+      changing            = changing,
+      properties          = properties,
+      withChecksums       = withChecksums,
+      withSignatures      = withSignatures,
+      withArtifacts       = withArtifacts,
+      dropInfoAttributes  = dropInfoAttributes,
+      authentication      = authentication
     ) match {
       case Right(repo) => repo
       case Left(msg) =>

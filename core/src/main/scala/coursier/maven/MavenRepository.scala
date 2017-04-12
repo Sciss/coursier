@@ -5,19 +5,20 @@ import coursier.core._
 import coursier.core.compatibility.encodeURIComponent
 import coursier.util.WebPage
 
+import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
 
 object MavenRepository {
 
   def ivyLikePath(
-    org: String,
-    dirName: String,
-    name: String,
-    version: String,
-    subDir: String,
+    org       : String,
+    dirName   : String,
+    name      : String,
+    version   : String,
+    subDir    : String,
     baseSuffix: String,
-    ext: String
-  ) =
+    ext       : String
+  ): Seq[String] =
     Seq(
       org,
       dirName,
@@ -28,8 +29,8 @@ object MavenRepository {
 
   def mavenVersioning(
     snapshotVersioning: SnapshotVersioning,
-    classifier: String,
-    extension: String
+    classifier        : String,
+    extension         : String
   ): Option[String] =
     snapshotVersioning
       .snapshotVersions
@@ -38,11 +39,11 @@ object MavenRepository {
       .filter(_.nonEmpty)
 
 
-  val defaultConfigurations = Map(
+  val defaultConfigurations: Map[String, Seq[String]] = Map(
     "compile" -> Seq.empty,
     "runtime" -> Seq("compile"),
     "default" -> Seq("runtime"),
-    "test" -> Seq("runtime")
+    "test"    -> Seq("runtime")
   )
 
   def dirModuleName(module: Module, sbtAttrStub: Boolean): String =
@@ -69,7 +70,7 @@ final case class MavenRepository(
   import Repository._
   import MavenRepository._
 
-  val root0 = if (root.endsWith("/")) root else root + "/"
+  val root0: String = if (root.endsWith("/")) root else root + "/"
   val source = MavenSource(root0, changing, sbtAttrStub, authentication)
 
   private def modulePath(
@@ -85,9 +86,9 @@ final case class MavenRepository(
     root0 + path.map(encodeURIComponent).mkString("/")
 
   def projectArtifact(
-    module: Module,
-    version: String,
-    versioningValue: Option[String]
+    module          : Module,
+    version         : String,
+    versioningValue : Option[String]
   ): Artifact = {
 
     val path = modulePath(module, version) :+
@@ -149,109 +150,99 @@ final case class MavenRepository(
     Some(artifact)
   }
 
-  def versions[F[_]](
+  def versions(
     module: Module,
-    fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, Versions] =
-    EitherT(
+    fetch: Fetch.Content
+  )(implicit exec: ExecutionContext): Future[Either[String, Versions]] =
       versionsArtifact(module) match {
-        case None => F.point(-\/("Not supported"))
+        case None => Future.successful(Left("Not supported"))
         case Some(artifact) =>
-          F.map(fetch(artifact).run)(eitherStr =>
+          fetch(artifact).map(eitherStr =>
             for {
-              str <- eitherStr
-              xml <- \/.fromEither(compatibility.xmlParse(str))
-              _ <- if (xml.label == "metadata") \/-(()) else -\/("Metadata not found")
-              versions <- Pom.versions(xml)
+              str <- eitherStr.right
+              xml <- compatibility.xmlParse(str).right
+              _ <- (if (xml.label == "metadata") Right(()) else Left("Metadata not found")).right
+              versions <- Pom.versions(xml).right
             } yield versions
           )
       }
-    )
 
-  def snapshotVersioning[F[_]](
+  def snapshotVersioning(
     module: Module,
     version: String,
-    fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, SnapshotVersioning] = {
-
-    EitherT(
+    fetch: Fetch.Content
+  )(implicit exec: ExecutionContext): Future[Either[String, SnapshotVersioning]] = {
       snapshotVersioningArtifact(module, version) match {
-        case None => F.point(-\/("Not supported"))
+        case None => Future.successful(Left("Not supported"))
         case Some(artifact) =>
-          F.map(fetch(artifact).run)(eitherStr =>
+          fetch(artifact).map(eitherStr =>
             for {
-              str <- eitherStr
-              xml <- \/.fromEither(compatibility.xmlParse(str))
-              _ <- if (xml.label == "metadata") \/-(()) else -\/("Metadata not found")
-              snapshotVersioning <- Pom.snapshotVersioning(xml)
+              str <- eitherStr.right
+              xml <- compatibility.xmlParse(str).right
+              _ <- (if (xml.label == "metadata") Right(()) else Left("Metadata not found")).right
+              snapshotVersioning <- Pom.snapshotVersioning(xml).right
             } yield snapshotVersioning
           )
       }
-    )
   }
 
-  def findNoInterval[F[_]](
+  def findNoInterval(
     module: Module,
     version: String,
-    fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, Project] =
-    EitherT {
-      def withSnapshotVersioning =
-        snapshotVersioning(module, version, fetch).flatMap { snapshotVersioning =>
-          val versioningOption =
-            mavenVersioning(snapshotVersioning, "", "jar")
-              .orElse(mavenVersioning(snapshotVersioning, "", ""))
+    fetch: Fetch.Content
+  )(implicit exec: ExecutionContext): Future[Either[String, Project]] = {
+      def withSnapshotVersioning: Future[Either[String, Project]] =
+        snapshotVersioning(module, version, fetch).flatMap[Either[String, Project]] { svE =>
+          svE.fold[Future[Either[String, Project]]](err => Future.successful(Left(err)), { sv =>
+            val versioningOption: Option[String] =
+              mavenVersioning(sv, "", "jar")
+                .orElse(mavenVersioning(sv, "", ""))
 
-          versioningOption match {
-            case None =>
-              EitherT[F, String, Project](
-                F.point(-\/("No snapshot versioning value found"))
-              )
-            case versioning @ Some(_) =>
-              findVersioning(module, version, versioning, fetch)
-                .map(_.copy(snapshotVersioning = Some(snapshotVersioning)))
-          }
+            val res: Future[Either[String, Project]] = versioningOption match {
+              case None =>
+                Future.successful[Either[String, Project]](Left("No snapshot versioning value found"))
+              case versioning @ Some(_) =>
+                findVersioning(module, version, versioning, fetch)
+                  .map[Either[String, Project]](_.right.map(_.copy(snapshotVersioning = Some(sv))))
+            }
+            res
+          })
         }
 
-      val res = F.bind(findVersioning(module, version, None, fetch).run) { eitherProj =>
+      val res = findVersioning(module, version, None, fetch).flatMap { eitherProj =>
         if (eitherProj.isLeft && version.contains("-SNAPSHOT"))
-          F.map(withSnapshotVersioning.run)(eitherProj0 =>
+          withSnapshotVersioning.map(eitherProj0 =>
             if (eitherProj0.isLeft)
               eitherProj
             else
               eitherProj0
           )
         else
-          F.point(eitherProj)
+          Future.successful(eitherProj)
       }
 
       // keep exact version used to get metadata, in case the one inside the metadata is wrong
-      F.map(res)(_.map(proj => proj.copy(actualVersionOpt = Some(version))))
+      res.map(_.right.map(proj => proj.copy(actualVersionOpt = Some(version))))
     }
 
-  def findVersioning[F[_]](
+  type VerContent = Either[String, Project]
+  type VerResult  = Future[VerContent]
+
+  def findVersioning(
     module: Module,
     version: String,
     versioningValue: Option[String],
-    fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, Project] = {
+    fetch: Fetch.Content
+  )(implicit exec: ExecutionContext): VerResult = {
 
-    def parseRawPom(str: String) =
+    def parseRawPom(str: String): Either[String, Project] =
       for {
-        xml <- \/.fromEither(compatibility.xmlParse(str))
-        _ <- if (xml.label == "project") \/-(()) else -\/("Project definition not found")
-        proj <- Pom.project(xml)
+        xml <- compatibility.xmlParse(str).right
+        _   <- (if (xml.label == "project") Right(()) else Left("Project definition not found")).right
+        proj <- Pom.project(xml).right
       } yield proj
 
-    def artifactFor(url: String) =
+    def artifactFor(url: String): Artifact =
       Artifact(
         url,
         Map.empty,
@@ -283,101 +274,100 @@ final case class MavenRepository(
 
     val listFilesUrl = urlFor(modulePath(module, version)) + "/"
 
-    for {
-      str <- fetch(projectArtifact(module, version, versioningValue))
-      rawListFilesPageOpt <- EitherT(F.map(fetch(artifactFor(listFilesUrl)).run) {
-        e => \/-(e.toOption): String \/ Option[String]
-      })
-      proj0 <- EitherT(F.point[String \/ Project](parseRawPom(str)))
-    } yield {
+    fetch(projectArtifact(module, version, versioningValue)).flatMap { strE =>
+      strE.fold[VerResult](err => Future.successful(Left(err)), { str =>
+        fetch(artifactFor(listFilesUrl)).map { e =>
+          val rawListFilesPageOpt = e.fold[Option[String]](_ => None, Some(_))
+          parseRawPom(str).right.map { proj0 =>
+            val foundPublications =
+              rawListFilesPageOpt match {
+                case Some(rawListFilesPage) =>
 
-      val foundPublications =
-        rawListFilesPageOpt match {
-          case Some(rawListFilesPage) =>
+                  val files = WebPage.listFiles(listFilesUrl, rawListFilesPage)
 
-            val files = WebPage.listFiles(listFilesUrl, rawListFilesPage)
+                  val prefix = s"${module.name}-${versioningValue.getOrElse(version)}"
 
-            val prefix = s"${module.name}-${versioningValue.getOrElse(version)}"
+                  val packagingTpeMap = proj0.packagingOpt
+                    .map { packaging =>
+                      (MavenSource.typeDefaultClassifier(packaging), MavenSource.typeExtension(packaging)) -> packaging
+                    }
+                    .toMap
 
-            val packagingTpeMap = proj0.packagingOpt
-              .map { packaging =>
-                (MavenSource.typeDefaultClassifier(packaging), MavenSource.typeExtension(packaging)) -> packaging
+                  files
+                    .flatMap(isArtifact(_, prefix))
+                    .map {
+                      case (classifier, ext) =>
+                        val tpe = packagingTpeMap.getOrElse(
+                          (classifier, ext),
+                          MavenSource.classifierExtensionDefaultTypeOpt(classifier, ext).getOrElse(ext)
+                        )
+                        val config = MavenSource.typeDefaultConfig(tpe).getOrElse("compile")
+                        config -> Publication(
+                          module.name,
+                          tpe,
+                          ext,
+                          classifier
+                        )
+                    }
+
+                case None =>
+                  // Publications can't be listed - MavenSource then handles that
+                  Nil
               }
-              .toMap
 
-            files
-              .flatMap(isArtifact(_, prefix))
-              .map {
-                case (classifier, ext) =>
-                  val tpe = packagingTpeMap.getOrElse(
-                    (classifier, ext),
-                    MavenSource.classifierExtensionDefaultTypeOpt(classifier, ext).getOrElse(ext)
-                  )
-                  val config = MavenSource.typeDefaultConfig(tpe).getOrElse("compile")
-                  config -> Publication(
-                    module.name,
-                    tpe,
-                    ext,
-                    classifier
-                  )
-              }
+            val proj = Pom.addOptionalDependenciesInConfig(
+              proj0.copy(configurations = defaultConfigurations),
+              Set("", "default"),
+              "optional"
+            )
 
-          case None =>
-            // Publications can't be listed - MavenSource then handles that
-            Nil
+            proj.copy(
+              actualVersionOpt = Some(version),
+              publications = foundPublications
+            )
+          }
         }
-
-      val proj = Pom.addOptionalDependenciesInConfig(
-        proj0.copy(configurations = defaultConfigurations),
-        Set("", "default"),
-        "optional"
-      )
-
-      proj.copy(
-        actualVersionOpt = Some(version),
-        publications = foundPublications
-      )
+      })
     }
   }
 
-  def find[F[_]](
+  def find(
     module: Module,
     version: String,
-    fetch: Fetch.Content[F]
-  )(implicit
-    F: Monad[F]
-  ): EitherT[F, String, (Artifact.Source, Project)] = {
+    fetch: Fetch.Content
+  )(implicit exec: ExecutionContext): FindResult = {
 
     Parse.versionInterval(version)
       .orElse(Parse.ivyLatestSubRevisionInterval(version))
       .filter(_.isValid) match {
         case None =>
-          findNoInterval(module, version, fetch).map((source, _))
+          findNoInterval(module, version, fetch).map(_.right.map((source, _)))
         case Some(itv) =>
-          versions(module, fetch).flatMap { versions0 =>
-            val eitherVersion = {
-              val release = Version(versions0.release)
+          versions(module, fetch).flatMap { versions0E =>
+            versions0E.fold(err => Future.successful(Left(err)), { versions0 =>
+              val eitherVersion = {
+                val release = Version(versions0.release)
 
-              if (itv.contains(release)) \/-(versions0.release)
-              else {
-                val inInterval = versions0.available
-                  .map(Version(_))
-                  .filter(itv.contains)
+                if (itv.contains(release)) Right(versions0.release)
+                else {
+                  val inInterval = versions0.available
+                    .map(Version(_))
+                    .filter(itv.contains)
 
-                if (inInterval.isEmpty) -\/(s"No version found for $version")
-                else \/-(inInterval.max.repr)
+                  if (inInterval.isEmpty) Left(s"No version found for $version")
+                  else Right(inInterval.max.repr)
+                }
               }
-            }
 
-            eitherVersion match {
-              case -\/(reason) => EitherT[F, String, (Artifact.Source, Project)](F.point(-\/(reason)))
-              case \/-(version0) =>
-                findNoInterval(module, version0, fetch)
-                  .map(_.copy(versions = Some(versions0)))
-                  .map((source, _))
-            }
+              eitherVersion match {
+                case Left(reason) => Future.successful(Left(reason))
+                case Right(version0) =>
+                  findNoInterval(module, version0, fetch)
+                    .map(_.right.map(_.copy(versions = Some(versions0))))
+                    .map(_.right.map((source, _)))
+              }
+            })
           }
     }
   }
-
 }

@@ -2,18 +2,17 @@ package coursier.core
 
 import coursier.Fetch
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
 
 trait Repository extends Product with Serializable {
-  def find(
-    module: Module,
-    version: String,
-    fetch: Fetch.Content
-  ): Future[Either[String, (Artifact.Source, Project)]]
+  def find(module: Module, version: String, fetch: Fetch.Content)
+          (implicit exec: ExecutionContext): Repository.FindResult
 }
 
 object Repository {
+  type FindContent  = Either[String, (Artifact.Source, Project)]
+  type FindResult   = Future[FindContent]
 
   implicit class ArtifactExtensions(val underlying: Artifact) extends AnyVal {
     def withDefaultChecksums: Artifact =

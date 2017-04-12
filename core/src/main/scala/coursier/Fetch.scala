@@ -14,6 +14,9 @@ object Fetch {
 
   type Metadata = Seq[(Module, String)] => Future[MD]
 
+  type FindContent = Either[Seq[String], (Artifact.Source, Project)]
+  type FindResult  = Future[FindContent]
+
   /**
     * Try to find `module` among `repositories`.
     *
@@ -30,7 +33,7 @@ object Fetch {
     module: Module,
     version: String,
     fetch: Content
-  )(implicit exec: ExecutionContext): Future[Either[Seq[String], (Artifact.Source, Project)]] = {
+  )(implicit exec: ExecutionContext): FindResult = {
 
     val lookups: Seq[(Repository, Future[Either[String, (Artifact.Source, Project)]])] =
       repositories.map(repo => repo -> repo.find(module, version, fetch) /* .run */)
