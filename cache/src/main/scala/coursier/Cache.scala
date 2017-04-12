@@ -1,10 +1,10 @@
 package coursier
 
 import java.math.BigInteger
-import java.net.{ HttpURLConnection, URL, URLConnection, URLStreamHandler, URLStreamHandlerFactory }
-import java.nio.channels.{ OverlappingFileLockException, FileLock }
+import java.net.{HttpURLConnection, URL, URLConnection, URLStreamHandler, URLStreamHandlerFactory}
+import java.nio.channels.{FileLock, OverlappingFileLockException}
 import java.security.MessageDigest
-import java.util.concurrent.{ ConcurrentHashMap, Executors, ExecutorService }
+import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors}
 import java.util.regex.Pattern
 
 import coursier.core.Authentication
@@ -13,14 +13,13 @@ import coursier.internal.FileUtil
 import coursier.util.Base64.Encoder
 
 import scala.annotation.tailrec
-
 import scalaz._
 import scalaz.Scalaz.ToEitherOps
-import scalaz.concurrent.{ Task, Strategy }
+import scalaz.concurrent.{Strategy, Task}
+import java.io.{Serializable => _, _}
 
-import java.io.{ Serializable => _, _ }
-
-import scala.concurrent.duration.{ Duration, DurationInt }
+import scala.concurrent.Future
+import scala.concurrent.duration.{Duration, DurationInt}
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -92,11 +91,11 @@ object Cache {
   }
 
   private def readFullyTo(
-    in: InputStream,
-    out: OutputStream,
-    logger: Option[Logger],
-    url: String,
-    alreadyDownloaded: Long
+    in                : InputStream,
+    out               : OutputStream,
+    logger            : Option[Logger],
+    url               : String,
+    alreadyDownloaded : Long
   ): Unit = {
 
     val b = Array.fill[Byte](bufferSize)(0)
@@ -123,7 +122,7 @@ object Cache {
     *
     * Should hopefully address some transient errors seen on the CI of ensime-server.
     */
-  private def withStructureLock[T](cache: File)(f: => T): T = {
+  private def withStructureLock[A](cache: File)(f: => A): A = {
 
     val intraProcessLock = Option(processStructureLocks.get(cache)).getOrElse {
       val lock = new AnyRef
@@ -151,11 +150,11 @@ object Cache {
           }
         }
         finally if (lock != null) lock.release()
-      } finally if (out != null) out.close()
+      } finally if (out  != null) out .close()
     }
   }
 
-  def withLockFor[T](cache: File, file: File)(f: => FileError \/ T): FileError \/ T = {
+  def withLockFor[A](cache: File, file: File)(f: => Either[FileError, A]): Either[FileError, A] = {
     val lockFile = new File(file.getParentFile, s"${file.getName}.lock")
 
     var out: FileOutputStream = null
@@ -170,7 +169,7 @@ object Cache {
       try {
         lock = out.getChannel.tryLock()
         if (lock == null)
-          -\/(FileError.Locked(file))
+          Left(FileError.Locked(file))
         else
           try f
           finally {
@@ -183,7 +182,7 @@ object Cache {
       }
       catch {
         case e: OverlappingFileLockException =>
-          -\/(FileError.Locked(file))
+          Left(FileError.Locked(file))
       }
       finally if (lock != null) lock.release()
     } finally if (out != null) out.close()
@@ -319,7 +318,7 @@ object Cache {
   def url(s: String): URL =
     new URL(null, s, handlerFor(s).orNull)
 
-  def urlConnection(url0: String, authentication: Option[Authentication]) = {
+  def urlConnection(url0: String, authentication: Option[Authentication]): URLConnection = {
     var conn: URLConnection = null
 
     try {
@@ -541,11 +540,7 @@ object Cache {
           None
       }
 
-    def remote(
-      file: File,
-      url: String
-    ): EitherT[Task, FileError, Unit] =
-      EitherT {
+    def remote(file: File, url: String): Future[Either[FileError, Unit]] = {
         Task {
           withLockFor(cache, file) {
             downloading(url, file, logger) {
@@ -628,42 +623,38 @@ object Cache {
 
       val errFile = new File(file.getParentFile, "." + file.getName + ".error")
 
-      def validErrFileExists =
-        EitherT {
+      def validErrFileExists() =
+        {
           Task {
             (referenceFileExists && errFile.exists()).right[FileError]
           }
         }
 
-      def createErrFile =
-        EitherT {
-          Task {
-            if (referenceFileExists) {
-              if (!errFile.exists())
-                FileUtil.write(errFile, "".getBytes("UTF-8"))
-            }
-
-            ().right[FileError]
+      def createErrFile(): Future[Either[FileError, Unit]] =
+        Future {
+          if (referenceFileExists) {
+            if (!errFile.exists())
+              FileUtil.write(errFile, "".getBytes("UTF-8"))
           }
+
+          Right(())
         }
 
-      def deleteErrFile =
-        EitherT {
-          Task {
-            if (errFile.exists())
+      def deleteErrFile(): Future[Either[FileError, Unit]] =
+        Future {
+          if (errFile.exists())
               errFile.delete()
 
-            ().right[FileError]
-          }
+          Right(())
         }
 
-      def retainError =
-        EitherT {
+      def retainError() =
+        {
           remote(file, url).run.flatMap {
             case err @ -\/(FileError.NotFound(_, Some(true))) =>
-              createErrFile.run.map(_ => err)
+              createErrFile().run.map(_ => err)
             case other =>
-              deleteErrFile.run.map(_ => other)
+              deleteErrFile().map(_ => other)
           }
         }
 
@@ -671,25 +662,23 @@ object Cache {
         case CachePolicy.FetchMissing | CachePolicy.LocalOnly | CachePolicy.LocalUpdate | CachePolicy.LocalUpdateChanging =>
           validErrFileExists.flatMap { exists =>
             if (exists)
-              EitherT(Task.now(FileError.NotFound(url, Some(true)).left[Unit]))
+              Future.successful(Left(FileError.NotFound(url, Some(true))))
             else
-              retainError
+              retainError()
           }
 
         case CachePolicy.ForceDownload | CachePolicy.Update | CachePolicy.UpdateChanging =>
-          retainError
+          retainError()
       }
     }
 
-    def checkFileExists(file: File, url: String, log: Boolean = true): EitherT[Task, FileError, Unit] =
-      EitherT {
-        Task {
-          if (file.exists()) {
-            logger.foreach(_.foundLocally(url, file))
-            \/-(())
-          } else
-            -\/(FileError.NotFound(file.toString))
-        }
+    def checkFileExists(file: File, url: String, log: Boolean = true): Future[Either[FileError, Unit]] =
+      Future {
+        if (file.exists()) {
+          logger.foreach(_.foundLocally(url, file))
+          Right(())
+        } else
+          Left(FileError.NotFound(file.toString))
       }
 
     val urls =
@@ -894,7 +883,7 @@ object Cache {
     logger: Option[Logger] = None,
     pool: ExecutorService = defaultPool,
     ttl: Option[Duration] = defaultTtl
-  ): Fetch.Content[Task] = {
+  ): Fetch.Content = {
     artifact =>
       file(
         artifact,
@@ -971,7 +960,7 @@ object Cache {
       str + "/"
   }
 
-  lazy val ivy2Local = IvyRepository.fromPattern(
+  lazy val ivy2Local: IvyRepository = IvyRepository.fromPattern(
     (ivy2HomeUri + "local/") +: coursier.ivy.Pattern.default,
     dropInfoAttributes = true
   )
@@ -986,11 +975,13 @@ object Cache {
     withChecksums = false,
     withSignatures = false,
     dropInfoAttributes = true
-  ).getOrElse(
-    throw new Exception("Cannot happen")
   )
 
-  lazy val default = new File(
+//    .getOrElse(
+//    throw new Exception("Cannot happen")
+//  )
+
+  lazy val default: File = new File(
     sys.env.getOrElse(
       "COURSIER_CACHE",
       sys.props("user.home") + "/.coursier/cache/v1"
@@ -999,7 +990,7 @@ object Cache {
 
   val defaultConcurrentDownloadCount = 6
 
-  lazy val defaultPool =
+  lazy val defaultPool: ExecutorService =
     Executors.newFixedThreadPool(defaultConcurrentDownloadCount, Strategy.DefaultDaemonThreadFactory)
 
   lazy val defaultTtl: Option[Duration] = {
@@ -1035,9 +1026,9 @@ object Cache {
     def checkingUpdatesResult(url: String, currentTimeOpt: Option[Long], remoteTimeOpt: Option[Long]): Unit = {}
   }
 
-  var bufferSize = 1024*1024
+  var bufferSize: Int = 1024*1024
 
-  def readFullySync(is: InputStream) = {
+  def readFullySync(is: InputStream): Array[Byte] = {
     val buffer = new ByteArrayOutputStream()
     val data = Array.ofDim[Byte](16384)
 
@@ -1060,5 +1051,4 @@ object Cache {
       nRead = is.read(data, 0, data.length)
     }
   }
-
 }

@@ -11,8 +11,8 @@ package coursier.core
  */
 final case class Module(
   organization: String,
-  name: String,
-  attributes: Map[String, String]
+  name        : String,
+  attributes  : Map[String, String]
 ) {
 
   def trim: Module = copy(
@@ -112,18 +112,18 @@ final case class Project(
 
 /** Extra project info, not used during resolution */
 final case class Info(
-  description: String,
-  homePage: String,
-  licenses: Seq[(String, Option[String])],
-  developers: Seq[Info.Developer],
-  publication: Option[Versions.DateTime]
+  description : String,
+  homePage    : String,
+  licenses    : Seq   [(String, Option[String])],
+  developers  : Seq   [Info.Developer],
+  publication : Option[Versions.DateTime]
 )
 
 object Info {
   final case class Developer(
-    id: String,
+    id  : String,
     name: String,
-    url: String
+    url : String
   )
 
   val empty = Info("", "", Nil, Nil, None)

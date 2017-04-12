@@ -42,7 +42,7 @@ object Pom {
   def dependency(node: Node): Either[String, (String, Dependency)] = {
     for {
       mod <- module(node).right
-      exclusions: Seq[Module] <- {
+      exclusions <- {
         val xmlExclusions: Seq[Node] = node.children
           .find(_.label == "exclusions")
           .map(_.children.filter(_.label == "exclusion"))
@@ -118,92 +118,107 @@ object Pom {
 
     for {
       deps <- xmlDeps.toList.traverseU[String, (String, Dependency)](dependency) .right
+      depMgmts <- {
+        val xmlDepMgmts: Seq[Node] = node.children
+          .find(_.label == "dependencyManagement")
+          .flatMap(_.children.find(_.label == "dependencies"))
+          .map(_.children.filter(_.label == "dependency"))
+          .getOrElse(Seq.empty)
 
-      xmlDepMgmts: Seq[Node] = node.children
-        .find(_.label == "dependencyManagement")
-        .flatMap(_.children.find(_.label == "dependencies"))
-        .map(_.children.filter(_.label == "dependency"))
-        .getOrElse(Seq.empty)
-
-      depMgmts <- xmlDepMgmts.toList.traverseU[String, (String, Dependency)](dependency) .right
-
-      xmlProperties: Seq[Node] = node.children
-        .find(_.label == "properties")
-        .map(_.children.collect{case elem if elem.isElement => elem})
-        .getOrElse(Seq.empty)
+        xmlDepMgmts.toList.traverseU[String, (String, Dependency)](dependency) .right
+      }
 
       properties <- {
+        val xmlProperties: Seq[Node] = node.children
+          .find(_.label == "properties")
+          .map(_.children.collect{case elem if elem.isElement => elem})
+          .getOrElse(Seq.empty)
+
         xmlProperties.toList.traverseU[String, (String, String)](property)
       } .right
 
     } yield Profile(id, activeByDefault, activation, deps, depMgmts, properties.toMap)
   }
 
-  def packagingOpt(pom: Node): Option[String] =
-    textOpt(pom, "packaging", "")
+  def packagingOpt(pom: Node): Option[String] = textOpt(pom, "packaging", "")
 
   def project(pom: Node): Either[String, Project] = {
+    val parentOpt       : Option[Node]    = pom.children.find(_.label == "parent")
+    val parentVersionOpt: Option[String]  = parentOpt.map(readVersion)
+
     for {
       projModule <- module(pom, groupIdIsOptional = true).right
-      projVersion = readVersion(pom)
 
-      parentOpt: Option[Node] = pom.children
-        .find(_.label == "parent")
-      parentModuleOpt: Option[Module] <- parentOpt
+      parentModuleOpt <- parentOpt
         .map(module(_).right.map(Some(_)))
-        .getOrElse(Right(None))
-      parentVersionOpt: Option[String] = parentOpt
-        .map(readVersion)
+        .getOrElse(Right(None)).right
 
-      xmlDeps: Seq[Node] = pom.children
-        .find(_.label == "dependencies")
-        .map(_.children.filter(_.label == "dependency"))
-        .getOrElse(Seq.empty)
-      deps <- xmlDeps.toList.traverseU(dependency)
+      deps <- {
+        val xmlDeps: Seq[Node] = pom.children
+          .find(_.label == "dependencies")
+          .map(_.children.filter(_.label == "dependency"))
+          .getOrElse(Seq.empty)
 
-      xmlDepMgmts: Seq[Node] = pom.children
-        .find(_.label == "dependencyManagement")
-        .flatMap(_.children.find(_.label == "dependencies"))
-        .map(_.children.filter(_.label == "dependency"))
-        .getOrElse(Seq.empty)
-      depMgmts <- xmlDepMgmts.toList.traverseU(dependency)
+        xmlDeps.toList.traverseU(dependency).right
+      }
+
+      depMgmts <- {
+        val xmlDepMgmts: Seq[Node] = pom.children
+          .find(_.label == "dependencyManagement")
+          .flatMap(_.children.find(_.label == "dependencies"))
+          .map(_.children.filter(_.label == "dependency"))
+          .getOrElse(Seq.empty)
+
+        xmlDepMgmts.toList.traverseU(dependency).right
+      }
 
       groupId <- Some(projModule.organization).filter(_.nonEmpty)
         .orElse(parentModuleOpt.map(_.organization).filter(_.nonEmpty))
-        .toRightDisjunction("No organization found")
-      version <- Some(projVersion).filter(_.nonEmpty)
-        .orElse(parentVersionOpt.filter(_.nonEmpty))
-        .toRightDisjunction("No version found")
+        .fold[Either[String, String]](Left("No organization found"))(Right(_)).right
+
+      version <- {
+        val projVersion = readVersion(pom)
+
+        Some(projVersion).filter(_.nonEmpty)
+          .orElse(parentVersionOpt.filter(_.nonEmpty))
+          .fold[Either[String, String]](Left("No version found"))(Right(_)).right
+      }
 
       _ <- parentVersionOpt
         .map(v => if (v.isEmpty) Left("Parent version missing") else Right(()))
-        .getOrElse(Right(()))
+        .getOrElse(Right(())).right
+
       _ <- parentModuleOpt
         .map(mod => if (mod.organization.isEmpty) Left("Parent organization missing") else Right(()))
-        .getOrElse(Right(()))
+        .getOrElse(Right(())).right
 
-      xmlProperties = pom.children
-        .find(_.label == "properties")
-        .map(_.children.collect{case elem if elem.isElement => elem})
-        .getOrElse(Seq.empty)
-      properties <- xmlProperties.toList.traverseU(property)
+      properties <- {
+        val xmlProperties = pom.children
+          .find(_.label == "properties")
+          .map(_.children.collect{case elem if elem.isElement => elem})
+          .getOrElse(Seq.empty)
 
-      xmlProfiles = pom.children
-        .find(_.label == "profiles")
-        .map(_.children.filter(_.label == "profile"))
-        .getOrElse(Seq.empty)
-      profiles <- xmlProfiles.toList.traverseU(profile)
+        xmlProperties.toList.traverseU(property).right
+      }
+
+      profiles <- {
+        val xmlProfiles = pom.children
+          .find(_.label == "profiles")
+          .map(_.children.filter(_.label == "profile"))
+          .getOrElse(Seq.empty)
+
+        xmlProfiles.toList.traverseU(profile).right
+      }
 
       extraAttrs <- properties
         .collectFirst { case ("extraDependencyAttributes", s) => extraAttributes(s) }
-        .getOrElse(Right(Map.empty))
-
-      extraAttrsMap = extraAttrs.map {
-        case (mod, ver) =>
-          (mod.copy(attributes = Map.empty), ver) -> mod.attributes
-      }.toMap
+        .getOrElse(Right(Map.empty)).right
 
     } yield {
+
+      val extraAttrsMap = extraAttrs.map {
+        case (mod, ver) => (mod.copy(attributes = Map.empty), ver) -> mod.attributes
+      }.toMap
 
       val description = pom.children
         .find(_.label == "description")
@@ -226,20 +241,20 @@ object Pom {
           }.toSeq
         }
 
-      val developers = pom.children
+      val developers: Seq[Info.Developer] = pom.children
         .find(_.label == "developers")
         .toSeq
         .flatMap(_.children)
         .filter(_.label == "developer")
         .map { n =>
           for {
-            id <- textOpt(n, "id", "Developer ID")
+            id   <- textOpt(n, "id"  , "Developer ID")
             name <- textOpt(n, "name", "Developer name")
-            url <- textOpt(n, "url", "Developer URL")
+            url  <- textOpt(n, "url" , "Developer URL")
           } yield Info.Developer(id, name, url)
         }
         .collect {
-          case Right(d) => d
+          case Some(d) => d
         }
 
       Project(
@@ -275,26 +290,26 @@ object Pom {
 
   def versions(node: Node): Either[String, Versions] = {
     for {
-      organization <- textOpt(node, "groupId", "Organization") // Ignored
-      name <- textOpt(node, "artifactId", "Name") // Ignored
+      _ /* organization */ <- text(node, "groupId", "Organization").right // Ignored
+      _ /* name */         <- text(node, "artifactId", "Name")     .right // Ignored
 
       xmlVersioning <- node.children
         .find(_.label == "versioning")
-        .toRightDisjunction("Versioning info not found in metadata")
+        .fold[Either[String, Node]](Left("Versioning info not found in metadata"))(Right(_)).right
 
-      latest = textOpt(xmlVersioning, "latest", "Latest version")
-        .getOrElse("")
-      release = textOpt(xmlVersioning, "release", "Release version")
-        .getOrElse("")
+    } yield {
+      val latest  = textOpt(xmlVersioning, "latest" , "Latest version" ).getOrElse("")
+      val release = textOpt(xmlVersioning, "release", "Release version").getOrElse("")
 
-      versionsOpt = xmlVersioning.children
+      val versionsOpt = xmlVersioning.children
         .find(_.label == "versions")
         .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
 
-      lastUpdatedOpt = textOpt(xmlVersioning, "lastUpdated", "Last update date and time")
+      val lastUpdatedOpt = textOpt(xmlVersioning, "lastUpdated", "Last update date and time")
         .flatMap(parseDateTime)
 
-    } yield Versions(latest, release, versionsOpt.map(_.toList).getOrElse(Nil), lastUpdatedOpt)
+      Versions(latest, release, versionsOpt.map(_.toList).getOrElse(Nil), lastUpdatedOpt)
+    }
   }
 
   def snapshotVersion(node: Node): Either[String, SnapshotVersion] = {
@@ -320,43 +335,53 @@ object Pom {
   def snapshotVersioning(node: Node): Either[String, SnapshotVersioning] = {
     // FIXME Quite similar to Versions above
     for {
-      organization <- textOpt(node, "groupId", "Organization")
-      name <- textOpt(node, "artifactId", "Name")
-      version = readVersion(node)
+      organization  <- text(node, "groupId", "Organization").right
+      name          <- text(node, "artifactId", "Name")     .right
 
       xmlVersioning <- node.children
         .find(_.label == "versioning")
-        .toRightDisjunction("Versioning info not found in metadata")
+        .fold[Either[String, Node]](Left("Versioning info not found in metadata"))(Right(_)).right
 
-      latest = textOpt(xmlVersioning, "latest", "Latest version")
-        .getOrElse("")
-      release = textOpt(xmlVersioning, "release", "Release version")
-        .getOrElse("")
+      snapshotVersions <- {
+        val xmlSnapshotVersions = xmlVersioning.children
+          .find(_.label == "snapshotVersions")
+          .map(_.children.filter(_.label == "snapshotVersion"))
+          .getOrElse(Seq.empty)
 
-      versionsOpt = xmlVersioning.children
-        .find(_.label == "versions")
-        .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
+        xmlSnapshotVersions
+          .toList
+          .traverseU(snapshotVersion).right
+      }
 
-      lastUpdatedOpt = textOpt(xmlVersioning, "lastUpdated", "Last update date and time")
+    } yield {
+      val version = readVersion(node)
+      val latest  = textOpt(xmlVersioning, "latest" , "Latest version" ).getOrElse("")
+      val release = textOpt(xmlVersioning, "release", "Release version").getOrElse("")
+
+//      val versionsOpt = xmlVersioning.children
+//        .find(_.label == "versions")
+//        .map(_.children.filter(_.label == "version").flatMap(_.children.collectFirst{case Text(t) => t}))
+
+      val lastUpdatedOpt = textOpt(xmlVersioning, "lastUpdated", "Last update date and time")
         .flatMap(parseDateTime)
 
-      xmlSnapshotOpt = xmlVersioning.children
+      val xmlSnapshotOpt = xmlVersioning.children
         .find(_.label == "snapshot")
 
-      timestamp = xmlSnapshotOpt
+      val timestamp = xmlSnapshotOpt
         .flatMap(
           textOpt(_, "timestamp", "Snapshot timestamp")
         )
         .getOrElse("")
 
-      buildNumber = xmlSnapshotOpt
+      val buildNumber = xmlSnapshotOpt
         .flatMap(
           textOpt(_, "buildNumber", "Snapshot build number")
         )
         .filter(s => s.nonEmpty && s.forall(_.isDigit))
         .map(_.toInt)
 
-      localCopy = xmlSnapshotOpt
+      val localCopy = xmlSnapshotOpt
         .flatMap(
           textOpt(_, "localCopy", "Snapshot local copy")
         )
@@ -365,34 +390,28 @@ object Pom {
           case "false" => false
         }
 
-      xmlSnapshotVersions = xmlVersioning.children
-        .find(_.label == "snapshotVersions")
-        .map(_.children.filter(_.label == "snapshotVersion"))
-        .getOrElse(Seq.empty)
-      snapshotVersions <- xmlSnapshotVersions
-        .toList
-        .traverseU(snapshotVersion)
-    } yield SnapshotVersioning(
-      Module(organization, name, Map.empty),
-      version,
-      latest,
-      release,
-      timestamp,
-      buildNumber,
-      localCopy,
-      lastUpdatedOpt,
-      snapshotVersions
-    )
+      SnapshotVersioning(
+        Module(organization, name, Map.empty),
+        version           = version,
+        latest            = latest,
+        release           = release,
+        timestamp         = timestamp,
+        buildNumber       = buildNumber,
+        localCopy         = localCopy,
+        lastUpdated       = lastUpdatedOpt,
+        snapshotVersions  = snapshotVersions
+      )
+    }
   }
 
   val extraAttributeSeparator = ":#@#:"
-  val extraAttributePrefix = "+"
+  val extraAttributePrefix    = "+"
 
-  val extraAttributeOrg = "organisation"
-  val extraAttributeName = "module"
-  val extraAttributeVersion = "revision"
+  val extraAttributeOrg       = "organisation"
+  val extraAttributeName      = "module"
+  val extraAttributeVersion   = "revision"
 
-  val extraAttributeBase = Set(
+  val extraAttributeBase: Set[String] = Set(
     extraAttributeOrg,
     extraAttributeName,
     extraAttributeVersion,
@@ -423,17 +442,20 @@ object Pom {
       attrs.get(name)
         .toRight(s"$name not found in extra attributes '$s'")
 
-    for {
-      parts <- partsOrError.right
-      attrs = parts.grouped(2).collect {
+    partsOrError.right.flatMap { parts =>
+      val attrs = parts.grouped(2).collect {
         case Seq(k, v) if v != "NULL" =>
           k.stripPrefix(extraAttributeDropPrefix) -> v
       }.toMap
-      org     <- attrFrom(attrs, extraAttributeOrg).right
-      name    <- attrFrom(attrs, extraAttributeName).right
-      version <- attrFrom(attrs, extraAttributeVersion).right
-      remainingAttrs = attrs.filterKeys(!extraAttributeBase(_))
-    } yield (Module(org, name, remainingAttrs.toVector.toMap), version)
+      for {
+        org     <- attrFrom(attrs, extraAttributeOrg)     .right
+        name    <- attrFrom(attrs, extraAttributeName)    .right
+        version <- attrFrom(attrs, extraAttributeVersion) .right
+      } yield {
+        val remainingAttrs = attrs.filterKeys(!extraAttributeBase(_))
+        (Module(org, name, remainingAttrs.toVector.toMap), version)
+      }
+    }
   }
 
   def extraAttributes(s: String): Either[String, Seq[(Module, String)]] = {
@@ -443,7 +465,7 @@ object Pom {
       case (acc, line) =>
         for {
           modVers <- acc.right
-          modVer <- extraAttribute(line)
+          modVer  <- extraAttribute(line).right
         } yield modVers :+ modVer
     }
   }

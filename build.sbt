@@ -4,14 +4,14 @@ scalaVersion in ThisBuild := "2.11.8"
 
 // ---- dependencies ----
 
-val scalazVersion = "7.2.8"
+//val scalazVersion = "7.2.8"
 
 def depQuasiQuotes           = "org.scalamacros"        %% "quasiquotes"        % "2.1.0"
 def depFastParse             = "com.lihaoyi"            %% "fastparse"          % "0.4.2"
 def depJsoup                 = "org.jsoup"              %  "jsoup"              % "1.10.2"
 def depScalaXml              = "org.scala-lang.modules" %% "scala-xml"          % "1.0.6"
-def depScalazCore            = "org.scalaz"             %% "scalaz-core"        % scalazVersion
-def depScalazConcurrent      = "org.scalaz"             %% "scalaz-concurrent"  % scalazVersion
+//def depScalazCore            = "org.scalaz"             %% "scalaz-core"        % scalazVersion
+//def depScalazConcurrent      = "org.scalaz"             %% "scalaz-concurrent"  % scalazVersion
 def depUtest                 = "com.lihaoyi"            %% "utest"              % "0.4.5"
 
 def scalaAsync = Def.setting {
@@ -115,7 +115,7 @@ lazy val cache = project
   .dependsOn(core)
   .settings(
     coursierPrefix,
-    libraryDependencies += depScalazConcurrent
+//    libraryDependencies += depScalazConcurrent
   )
 
 lazy val jvm = project
