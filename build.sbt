@@ -114,7 +114,7 @@ lazy val tests = project
 lazy val cache = project
   .dependsOn(core)
   .settings(
-    coursierPrefix,
+    coursierPrefix
 //    libraryDependencies += depScalazConcurrent
   )
 

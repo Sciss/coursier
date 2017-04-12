@@ -3,10 +3,10 @@ package coursier
 import java.io.File
 
 sealed abstract class FileError(
-  val `type`: String,
-  val message: String
+                                 val tpe: String,
+                                 val message: String
 ) extends Product with Serializable {
-  def describe: String = s"${`type`}: $message"
+  def describe: String = s"$tpe: $message"
 }
 
 object FileError {

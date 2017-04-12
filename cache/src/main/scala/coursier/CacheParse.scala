@@ -6,8 +6,6 @@ import coursier.core.Authentication
 import coursier.ivy.IvyRepository
 import coursier.util.Parse
 
-import scalaz._, Scalaz._
-
 object CacheParse {
 
   def repository(s: String): Validation[String, Repository] =

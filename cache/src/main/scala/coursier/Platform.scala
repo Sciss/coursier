@@ -4,9 +4,6 @@ import java.io._
 
 import scala.language.implicitConversions
 
-import scalaz._
-import scalaz.concurrent.Task
-
 object Platform {
 
   def readFullySync(is: InputStream) = {
